@@ -160,22 +160,28 @@ pub fn decode(request: &ai::BidiAppendRequest) -> Result<DecodedAppend> {
         .map(|id| id.request_id.as_str())
         .filter(|id| !id.is_empty())
         .ok_or_else(|| Error::Protocol("BidiAppend request_id is required".into()))?;
-    if !request.data_binary.is_empty() {
-        return Err(Error::Protocol(
-            "BidiAppend data_binary is not part of the captured protocol".into(),
-        ));
-    }
-    if request.data.is_empty() {
-        return Err(Error::Protocol(
-            "BidiAppend contains no AgentClientMessage".into(),
-        ));
-    }
-    let payload = hex::decode(&request.data)
-        .map_err(|error| Error::Protocol(format!("invalid BidiAppend hex: {error}")))?;
+    let message = match (request.data.is_empty(), request.data_binary.is_empty()) {
+        (true, false) => agent::AgentClientMessage::decode(request.data_binary.as_slice())?,
+        (false, true) => {
+            let payload = hex::decode(&request.data)
+                .map_err(|error| Error::Protocol(format!("invalid BidiAppend hex: {error}")))?;
+            agent::AgentClientMessage::decode(payload.as_slice())?
+        }
+        (true, true) => {
+            return Err(Error::Protocol(
+                "BidiAppend contains no AgentClientMessage".into(),
+            ));
+        }
+        (false, false) => {
+            return Err(Error::Protocol(
+                "BidiAppend cannot set both data and data_binary".into(),
+            ));
+        }
+    };
     Ok(DecodedAppend {
         request_id: request_id.into(),
         seqno: request.append_seqno,
-        message: agent::AgentClientMessage::decode(payload.as_slice())?,
+        message,
     })
 }
 
@@ -208,4 +214,142 @@ pub async fn append(
         })
         .await?;
     Ok(ai::BidiAppendResponse {})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cursor 3.29+/3.31 `cursor-always-local` 发送的真实线级形态：
+    /// BidiAppendRequest { request_id: "req-329", append_seqno: 0, data_binary: AgentClientMessage.toBinary() }
+    #[test]
+    fn decode_accepts_cursor_329_data_binary_run_request_wire_bytes() {
+        let client_msg = agent::AgentClientMessage {
+            message: Some(agent::agent_client_message::Message::RunRequest(
+                agent::AgentRunRequest {
+                    conversation_id: Some("conv-329".into()),
+                    requested_model: Some(agent::RequestedModel {
+                        model_id: "83f1333d63840a0c".into(),
+                        ..Default::default()
+                    }),
+                    action: Some(agent::ConversationAction {
+                        action: Some(agent::conversation_action::Action::UserMessageAction(
+                            agent::UserMessageAction {
+                                user_message: Some(agent::UserMessage {
+                                    text: "ping".into(),
+                                    message_id: "msg-1".into(),
+                                    mode: agent::AgentMode::Agent as i32,
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        let wire = ai::BidiAppendRequest {
+            data: String::new(),
+            request_id: Some(ai::BidiRequestId {
+                request_id: "req-329".into(),
+            }),
+            append_seqno: 0,
+            data_binary: client_msg.encode_to_vec(),
+        }
+        .encode_to_vec();
+        // 校验 tag 4 (0x22 = field 4, wire type 2) 确实出现在外层 protobuf 字节流中
+        assert!(wire.windows(2).any(|w| w[0] == 0x22));
+
+        let raw_request = ai::BidiAppendRequest::decode(wire.as_slice()).unwrap();
+        let decoded = decode(&raw_request).unwrap();
+        assert_eq!(decoded.request_id, "req-329");
+        assert_eq!(decoded.seqno, 0);
+        assert_eq!(decoded.conversation_id(), Some("conv-329"));
+        assert_eq!(decoded.model_id(), Some("83f1333d63840a0c"));
+    }
+
+    #[test]
+    fn decode_accepts_hex_data_when_data_binary_is_empty() {
+        // 真实捕获样本：KvClientMessage { id: 1, SetBlobResult {} } = 0x1a0408011a00
+        let request = ai::BidiAppendRequest {
+            data: "1a0408011a00".into(),
+            request_id: Some(ai::BidiRequestId {
+                request_id: "req-hex".into(),
+            }),
+            append_seqno: 2,
+            data_binary: Vec::new(),
+        };
+        let decoded = decode(&request).unwrap();
+        assert_eq!(decoded.request_id, "req-hex");
+        assert_eq!(decoded.seqno, 2);
+        assert!(matches!(
+            decoded.message.message,
+            Some(agent::agent_client_message::Message::KvClientMessage(_))
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_simultaneous_data_and_data_binary() {
+        let payload = [0x1a, 0x04, 0x08, 0x01, 0x1a, 0x00];
+        let request = ai::BidiAppendRequest {
+            data: hex::encode(payload),
+            request_id: Some(ai::BidiRequestId {
+                request_id: "req-both".into(),
+            }),
+            append_seqno: 1,
+            data_binary: payload.to_vec(),
+        };
+        let error = decode(&request).err().expect("must reject dual payload");
+        assert!(error
+            .to_string()
+            .contains("BidiAppend cannot set both data and data_binary"));
+    }
+
+    #[test]
+    fn decode_rejects_empty_data_and_data_binary() {
+        let request = ai::BidiAppendRequest {
+            data: String::new(),
+            request_id: Some(ai::BidiRequestId {
+                request_id: "req-empty".into(),
+            }),
+            append_seqno: 0,
+            data_binary: Vec::new(),
+        };
+        let error = decode(&request).err().expect("must reject empty payload");
+        assert!(error
+            .to_string()
+            .contains("BidiAppend contains no AgentClientMessage"));
+    }
+
+    #[test]
+    fn decode_rejects_malformed_data_binary_protobuf() {
+        let request = ai::BidiAppendRequest {
+            data: String::new(),
+            request_id: Some(ai::BidiRequestId {
+                request_id: "req-bad-pb".into(),
+            }),
+            append_seqno: 0,
+            data_binary: vec![0x0a, 0x0f, 0x01], // 截断的 length-delimited 字段
+        };
+        let error = decode(&request)
+            .err()
+            .expect("must reject truncated protobuf");
+        assert!(matches!(error, Error::Decode(_)));
+    }
+
+    #[test]
+    fn decode_rejects_missing_request_id() {
+        let request = ai::BidiAppendRequest {
+            data: String::new(),
+            request_id: None,
+            append_seqno: 0,
+            data_binary: vec![0x1a, 0x04, 0x08, 0x01, 0x1a, 0x00],
+        };
+        let error = decode(&request).err().expect("must require request_id");
+        assert!(error
+            .to_string()
+            .contains("BidiAppend request_id is required"));
+    }
 }

@@ -138,3 +138,242 @@ async fn bidi_append_gzip_body_is_decompressed_before_protobuf_decode() {
     assert!(text.contains("BidiAppend contains no AgentClientMessage"));
     assert!(!text.contains("protobuf decode error"));
 }
+
+#[tokio::test]
+async fn bidi_append_rejects_simultaneous_data_and_data_binary_with_bad_request() {
+    let (_directory, store) = fixtures::temp_store().await;
+    let assets = PromptAssets::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("prompt/cursor")
+            .as_path(),
+    )
+    .unwrap();
+    let clients = NetworkClients::new(store.clone());
+    let registry = TransportRegistry::new(
+        store,
+        Arc::new(fake_provider::FakeProvider::default()),
+        PromptCompiler::new(assets),
+    );
+    let payload = [0x1a, 0x04, 0x08, 0x01, 0x1a, 0x00];
+    let wire = ai::BidiAppendRequest {
+        data: hex::encode(payload),
+        request_id: Some(ai::BidiRequestId {
+            request_id: "dual-payload".into(),
+        }),
+        append_seqno: 0,
+        data_binary: payload.to_vec(),
+    }
+    .encode_to_vec();
+
+    let response = cursor::router(registry, clients)
+        .unwrap()
+        .oneshot(
+            Request::post("/aiserver.v1.BidiService/BidiAppend")
+                .header(header::CONTENT_TYPE, "application/proto")
+                .body(Body::from(wire))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    let text = std::str::from_utf8(&body).unwrap();
+    assert!(text.contains("BidiAppend cannot set both data and data_binary"));
+}
+
+#[tokio::test]
+async fn bidi_append_data_binary_routes_to_local_provider_and_streams_run_sse() {
+    use cursor_server::{
+        model::{ModelConfigInput, ModelType, OPENAI_CHAT_ENDPOINT},
+        provider::{FinishReason, ModelEvent},
+    };
+    use futures_util::StreamExt;
+
+    let (_directory, store) = fixtures::temp_store().await;
+    let saved_model = store
+        .create_model(&ModelConfigInput {
+            sort_order: 1,
+            display_name: "deepseek-v4.1-flash".into(),
+            group_name: None,
+            model_type: ModelType::OpenAi,
+            base_url: "https://example.com/v1".into(),
+            use_full_url: false,
+            api_key: "test-key".into(),
+            tooltip_data: "test".into(),
+            model_id: "deepseek-v4.1-flash".into(),
+            reasoning_effort: None,
+            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+            openai_extra_params_enabled: false,
+            openai_extra_params: serde_json::json!({}),
+            custom_headers_enabled: false,
+            custom_headers: serde_json::json!({}),
+            anthropic_extra_params_enabled: false,
+            anthropic_extra_params: serde_json::json!({}),
+            context_window_tokens: None,
+            max_completion_tokens: None,
+            anthropic_max_tokens: None,
+            anthropic_thinking_effort: None,
+            thinking_budget_tokens: None,
+        })
+        .await
+        .unwrap();
+
+    let provider = fake_provider::FakeProvider::default();
+    provider.push(vec![
+        ModelEvent::Start {
+            model_call_id: "call-1".into(),
+        },
+        ModelEvent::TextStart,
+        ModelEvent::TextDelta("pong from byok".into()),
+        ModelEvent::TextEnd,
+        ModelEvent::Done(FinishReason::Stop),
+    ]);
+    let assets = PromptAssets::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("prompt/cursor")
+            .as_path(),
+    )
+    .unwrap();
+    let clients = NetworkClients::new(store.clone());
+    let registry = TransportRegistry::new(store, Arc::new(provider), PromptCompiler::new(assets));
+    let app = cursor::router(registry, clients).unwrap();
+
+    let request_id = "req-data-binary-e2e";
+    let run_sse_app = app.clone();
+    let sse_task = tokio::spawn(async move {
+        let req_frame = connect::encode_message(&pb::BidiRequestId {
+            request_id: request_id.into(),
+        })
+        .unwrap();
+        run_sse_app
+            .oneshot(
+                Request::post("/agent.v1.AgentService/RunSSE")
+                    .header(header::CONTENT_TYPE, "application/connect+proto")
+                    .body(Body::from(req_frame))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    });
+
+    let run_client_msg = pb::AgentClientMessage {
+        message: Some(pb::agent_client_message::Message::RunRequest(
+            pb::AgentRunRequest {
+                conversation_id: Some("conv-data-binary-e2e".into()),
+                run_id: Some(request_id.into()),
+                requested_model: Some(pb::RequestedModel {
+                    model_id: saved_model.model_hash.clone(),
+                    ..Default::default()
+                }),
+                action: Some(pb::ConversationAction {
+                    action: Some(pb::conversation_action::Action::UserMessageAction(
+                        pb::UserMessageAction {
+                            user_message: Some(pb::UserMessage {
+                                text: "hello".into(),
+                                message_id: "user-1".into(),
+                                mode: pb::AgentMode::Agent as i32,
+                                ..Default::default()
+                            }),
+                            request_context: Some(pb::RequestContext::default()),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )),
+    };
+    let append_wire = connect::encode_message(&ai::BidiAppendRequest {
+        data: String::new(),
+        request_id: Some(ai::BidiRequestId {
+            request_id: request_id.into(),
+        }),
+        append_seqno: 0,
+        data_binary: run_client_msg.encode_to_vec(),
+    })
+    .unwrap();
+
+    let append_resp = app
+        .clone()
+        .oneshot(
+            Request::post("/aiserver.v1.BidiService/BidiAppend")
+                .header(header::CONTENT_TYPE, "application/connect+proto")
+                .body(Body::from(append_wire))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(append_resp.status(), StatusCode::OK);
+
+    let sse_resp = sse_task.await.unwrap();
+    assert_eq!(sse_resp.status(), StatusCode::OK);
+    let mut stream = sse_resp.into_body().into_data_stream();
+    let mut next_seqno = 1_i64;
+    let mut collected_text = String::new();
+    let mut saw_end_stream = false;
+
+    while let Some(chunk) = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .expect("RunSSE stream timed out")
+    {
+        let chunk = chunk.unwrap();
+        for (flags, payload) in connect::decode_frames(&chunk).unwrap() {
+            if flags & connect::END_STREAM_FLAG != 0 {
+                assert_eq!(payload.as_ref(), b"{}");
+                saw_end_stream = true;
+                break;
+            }
+            let server_msg = pb::AgentServerMessage::decode(payload).unwrap();
+            match server_msg.message {
+                Some(pb::agent_server_message::Message::KvServerMessage(kv)) => {
+                    let ack = pb::AgentClientMessage {
+                        message: Some(pb::agent_client_message::Message::KvClientMessage(
+                            pb::KvClientMessage {
+                                id: kv.id,
+                                message: Some(pb::kv_client_message::Message::SetBlobResult(
+                                    pb::SetBlobResult { error: None },
+                                )),
+                            },
+                        )),
+                    };
+                    let ack_wire = connect::encode_message(&ai::BidiAppendRequest {
+                        data: String::new(),
+                        request_id: Some(ai::BidiRequestId {
+                            request_id: request_id.into(),
+                        }),
+                        append_seqno: next_seqno,
+                        data_binary: ack.encode_to_vec(),
+                    })
+                    .unwrap();
+                    next_seqno += 1;
+                    let ack_resp = app
+                        .clone()
+                        .oneshot(
+                            Request::post("/aiserver.v1.BidiService/BidiAppend")
+                                .header(header::CONTENT_TYPE, "application/connect+proto")
+                                .body(Body::from(ack_wire))
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(ack_resp.status(), StatusCode::OK);
+                }
+                Some(pb::agent_server_message::Message::InteractionUpdate(update)) => {
+                    if let Some(pb::interaction_update::Message::TextDelta(delta)) = update.message
+                    {
+                        collected_text.push_str(&delta.text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if saw_end_stream {
+            break;
+        }
+    }
+
+    assert_eq!(collected_text, "pong from byok");
+    assert!(saw_end_stream);
+}
