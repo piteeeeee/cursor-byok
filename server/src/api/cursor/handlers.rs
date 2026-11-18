@@ -21,7 +21,7 @@ use crate::{
         },
         services::{
             account, analytics, commit_message, compatibility, entitlement::FreeEntitlementCache,
-            knowledge, model_catalog, server_config, tab,
+            model_catalog, server_config,
         },
         transport::{TransportParent, TransportRegistry},
     },
@@ -33,15 +33,10 @@ pub fn router(
     clients: crate::network::NetworkClients,
 ) -> Result<Router> {
     let proxy = CursorProxy::cursor(clients);
-    let knowledge = knowledge::KnowledgeService::managed()?;
-    Ok(router_with_proxy(registry, proxy, knowledge))
+    Ok(router_with_proxy(registry, proxy))
 }
 
-fn router_with_proxy(
-    registry: TransportRegistry,
-    proxy: CursorProxy,
-    knowledge_service: knowledge::KnowledgeService,
-) -> Router {
+fn router_with_proxy(registry: TransportRegistry, proxy: CursorProxy) -> Router {
     let web_cache = registry.web_cache().router();
     let free_entitlements = FreeEntitlementCache::default();
     Router::new()
@@ -148,19 +143,19 @@ fn router_with_proxy(
         )
         .route(
             "/aiserver.v1.AiService/KnowledgeBaseAdd",
-            post(knowledge::add),
+            post(compatibility::knowledge_base_mutation),
         )
         .route(
             "/aiserver.v1.AiService/KnowledgeBaseList",
-            post(knowledge::list),
+            post(compatibility::knowledge_base_list),
         )
         .route(
             "/aiserver.v1.AiService/KnowledgeBaseUpdate",
-            post(knowledge::update),
+            post(compatibility::knowledge_base_mutation),
         )
         .route(
             "/aiserver.v1.AiService/KnowledgeBaseRemove",
-            post(knowledge::remove),
+            post(compatibility::knowledge_base_mutation),
         )
         .route(
             analytics::BOOTSTRAP_STATSIG_PATH,
@@ -168,13 +163,11 @@ fn router_with_proxy(
         )
         .route("/auth/full_stripe_profile", get(account::stripe_profile))
         .route("/auth/stripe_profile", get(account::stripe_profile))
-        .merge(tab::router())
         .route_layer(DefaultBodyLimit::disable())
         .route_layer(RequestDecompressionLayer::new())
         .fallback(proxy::forward)
         .method_not_allowed_fallback(proxy::forward)
         .layer(Extension(proxy))
-        .layer(Extension(knowledge_service))
         .layer(Extension(free_entitlements))
         .with_state(registry)
         .merge(web_cache)

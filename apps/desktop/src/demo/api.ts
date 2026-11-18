@@ -1,14 +1,12 @@
 import type {
   CallDetail,
   CursorHarnessStatus,
-  ExternalApiSettings,
   LlmCall,
   Model,
   Overview,
   OverviewTokenUsageBucket,
   ProxySettings,
   StatisticsStorage,
-  TabSettings,
 } from "../shared/api";
 
 const API_ROOT = "/__byok-api__/api";
@@ -87,7 +85,6 @@ let harnessStatus: CursorHarnessStatus = {
 
 let detailed = true;
 let portSettings = { proxy_port: 0, service_port: 0 };
-let externalApiSettings: ExternalApiSettings = { enabled: false, api_key: "" };
 let proxySettings: ProxySettings = {
   mode: "default",
   address: "",
@@ -95,7 +92,6 @@ let proxySettings: ProxySettings = {
   username: "",
   has_password: false,
 };
-let tabSettings: TabSettings = { mode: "public", address: "" };
 let storage: StatisticsStorage = { call_count: calls.length, trace_count: calls.length };
 
 export function installDemoApi() {
@@ -110,7 +106,6 @@ export function installDemoApi() {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     const body = await readBody(input, init);
 
-    if (path === "/promotions") return json({ slots: [] });
     if (path === "/models" && method === "GET") return json(models);
     if (path === "/models" && method === "POST") return json(models);
     if (path === "/models/order") return json(models);
@@ -150,11 +145,6 @@ export function installDemoApi() {
       portSettings = body as typeof portSettings;
       return json(portSettings);
     }
-    if (path === "/settings/external-api" && method === "GET") return json(externalApiSettings);
-    if (path === "/settings/external-api") {
-      externalApiSettings = body as ExternalApiSettings;
-      return json(externalApiSettings);
-    }
     if (path === "/settings/storage/statistics" && method === "GET") return json(storage);
     if (path === "/settings/storage/statistics") {
       const scope = (body as { scope?: string } | null)?.scope ?? "details";
@@ -167,11 +157,6 @@ export function installDemoApi() {
       proxySettings = { ...proxySettings, ...next, has_password: Boolean(next.has_password) };
       return json(proxySettings);
     }
-    if (path === "/settings/tab" && method === "GET") return json(tabSettings);
-    if (path === "/settings/tab") {
-      tabSettings = body as TabSettings;
-      return json(tabSettings);
-    }
     if (path === "/settings/desktop" && method === "GET") return json({ silent_start: false, show_dock_icon: true });
     if (path === "/settings/desktop") return json(body);
     if (path === "/desktop/open-external-url") {
@@ -182,7 +167,6 @@ export function installDemoApi() {
       }
       return empty();
     }
-    if (path.endsWith("/dismissals")) return empty();
 
     return json({ message: `Unhandled demo endpoint: ${method} ${path}` }, 404);
   };

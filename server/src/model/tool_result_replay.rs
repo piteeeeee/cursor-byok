@@ -27,8 +27,7 @@ fn replay_limit(name: &str) -> Option<usize> {
         "Grep" | "Glob" => Some(32 * KIB),
         "PatchEdit" | "PatchEditLines" | "PatchEditSpan" | "StrReplace" => Some(4 * KIB),
         "Edit" | "EditNotebook" | "Write" | "WebFetch" => Some(32 * KIB),
-        "CallMcpTool" | "FetchMcpResource" | "ListMcpResources" | "GetMcpTools"
-        | "SembleSearch" | "SembleFindRelated" => Some(32 * KIB),
+        "CallMcpTool" | "FetchMcpResource" | "ListMcpResources" | "GetMcpTools" => Some(32 * KIB),
         _ => None,
     }
 }

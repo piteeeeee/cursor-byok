@@ -3,7 +3,6 @@ mod edit;
 mod exec;
 mod interaction;
 mod local;
-mod search;
 
 use std::collections::BTreeMap;
 
@@ -11,7 +10,6 @@ use crate::{
     cursor::protocol::proto::agent::v1 as pb,
     model::ToolCall,
     search::{WebFetch, WebSearch},
-    store::Store,
     Error, Result,
 };
 
@@ -33,12 +31,10 @@ pub(super) enum InteractionContinuation {
 
 pub(super) async fn start(
     runtime: &CursorToolRuntime,
-    results: &ToolResultSender,
     call: &ToolCall,
     message_index: usize,
     dynamic_mcp: &BTreeMap<String, pb::McpToolDefinition>,
     context: &ExecContext,
-    store: Option<&Store>,
 ) -> Result<ToolStart> {
     if let Some(definition) = dynamic_mcp.get(&call.name) {
         return exec::start_dynamic(runtime, call, definition, context).await;
@@ -64,7 +60,6 @@ pub(super) async fn start(
         "askquestion" | "websearch" | "webfetch" | "switchmode" | "createplan"
         | "generateimage" => interaction::start(runtime, call).await,
         "todowrite" | "updatecurrentstep" => local::start(call, message_index),
-        "semblesearch" | "semblefindrelated" => search::start(results, call, store.cloned()),
         _ => Ok(unavailable_tool(call)),
     }
 }

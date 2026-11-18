@@ -15,6 +15,12 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Message)]
 struct EmptyResponse {}
 
+#[derive(Clone, Copy, PartialEq, Message)]
+struct KnowledgeBaseListEmptyResponse {
+    #[prost(bool, tag = "1")]
+    success: bool,
+}
+
 pub async fn available_docs(
     Extension(proxy): Extension<CursorProxy>,
     request: Request<Body>,
@@ -46,6 +52,25 @@ pub async fn update_conversation_metadata(
         agent::UpdateConversationMetadataResponse {},
     )
     .await
+}
+
+pub async fn knowledge_base_list(
+    Extension(proxy): Extension<CursorProxy>,
+    request: Request<Body>,
+) -> Result<Response<Body>> {
+    route(
+        &proxy,
+        request,
+        KnowledgeBaseListEmptyResponse { success: true },
+    )
+    .await
+}
+
+pub async fn knowledge_base_mutation(
+    Extension(proxy): Extension<CursorProxy>,
+    request: Request<Body>,
+) -> Result<Response<Body>> {
+    route(&proxy, request, EmptyResponse {}).await
 }
 
 async fn route<M: Message>(
@@ -115,5 +140,13 @@ mod tests {
         assert_eq!(response.headers()[header::CONTENT_LENGTH], "0");
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn knowledge_base_list_mock_encodes_success_true_with_empty_results() {
+        let response = proto(KnowledgeBaseListEmptyResponse { success: true });
+        assert_eq!(response.headers()[header::CONTENT_LENGTH], "2");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], &[0x08, 0x01]);
     }
 }

@@ -12,11 +12,6 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::ads::{
-    AdDismissalInput, AdRuntime, ADS_ENDPOINT, APP_VERSION_HEADER, DEVICE_ID_HEADER,
-    DISABLED_AD_IDS_HEADER, LANGUAGE_HEADER, OS_HEADER,
-};
-
 use crate::{
     local_app::CursorHarness,
     model::{
@@ -28,8 +23,8 @@ use crate::{
     plugin::{PluginDescriptor, PluginRegistry, PluginRuntime, PluginRuntimeStatus},
     provider::{is_valid_response_event, ModelEvent, Provider},
     store::{
-        CommitSettings, DesktopSettings, ExternalApiSettings, PortSettings, ProxySettings,
-        ProxySettingsInput, StatisticsStorage, Store, TabSettings, TokenPricingSettings,
+        CommitSettings, DesktopSettings, PortSettings, ProxySettings, ProxySettingsInput,
+        StatisticsStorage, Store, TokenPricingSettings,
     },
     Error, Result,
 };
@@ -42,7 +37,6 @@ pub struct ControlService {
     plugin_runtime: PluginRuntime,
     plugins: PluginRegistry,
     clients: crate::network::NetworkClients,
-    app_version: String,
     model_tests: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
 }
 
@@ -154,7 +148,6 @@ impl ControlService {
         plugin_runtime: PluginRuntime,
         plugins: PluginRegistry,
         clients: crate::network::NetworkClients,
-        app_version: String,
     ) -> Result<Self> {
         Ok(Self {
             cursor_harness: CursorHarness::new(store.clone())?,
@@ -163,7 +156,6 @@ impl ControlService {
             plugin_runtime,
             plugins,
             clients,
-            app_version,
             model_tests: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
@@ -280,69 +272,6 @@ impl ControlService {
 
     pub fn cancel_plugin_runtime_initialization(&self) -> PluginRuntimeStatus {
         self.plugin_runtime.cancel_initialization()
-    }
-
-    pub(super) async fn ads(
-        &self,
-        disabled_ad_ids: Option<&str>,
-        language: &str,
-    ) -> Result<AdRuntime> {
-        let client = self.clients.default_client().await?;
-        let installation_id = self.store.installation_id().await?;
-        let mut request = client
-            .get(ADS_ENDPOINT)
-            .header(DEVICE_ID_HEADER, installation_id)
-            .header(OS_HEADER, std::env::consts::OS)
-            .header(APP_VERSION_HEADER, &self.app_version)
-            .header(LANGUAGE_HEADER, language)
-            .timeout(std::time::Duration::from_secs(60));
-        if let Some(disabled_ad_ids) = disabled_ad_ids.filter(|value| !value.is_empty()) {
-            request = request.header(DISABLED_AD_IDS_HEADER, disabled_ad_ids);
-        }
-        let response = request.send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            let message = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "advertisement service failed ({status}): {}",
-                message.chars().take(200).collect::<String>()
-            )));
-        }
-        let mut runtime = response.json::<AdRuntime>().await?.into_menu_slots()?;
-        runtime.cache_images(&client).await;
-        Ok(runtime)
-    }
-
-    pub(super) async fn dismiss_ad(&self, ad_id: &str, input: &AdDismissalInput) -> Result<()> {
-        let client = self.clients.default_client().await?;
-        let installation_id = self.store.installation_id().await?;
-        let mut endpoint = Url::parse(ADS_ENDPOINT).map_err(|error| {
-            Error::Config(format!("advertisement endpoint is invalid: {error}"))
-        })?;
-        endpoint.set_query(None);
-        endpoint
-            .path_segments_mut()
-            .map_err(|_| Error::Config("advertisement endpoint cannot contain an ad id".into()))?
-            .push(ad_id)
-            .push("dismissals");
-        let response = client
-            .post(endpoint)
-            .header(DEVICE_ID_HEADER, installation_id)
-            .header(OS_HEADER, std::env::consts::OS)
-            .header(APP_VERSION_HEADER, &self.app_version)
-            .json(input)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await?;
-        let status = response.status();
-        if !status.is_success() {
-            let message = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "advertisement dismissal failed ({status}): {}",
-                message.chars().take(200).collect::<String>()
-            )));
-        }
-        Ok(())
     }
 
     pub async fn models(&self) -> Result<Vec<ModelConfig>> {
@@ -605,13 +534,10 @@ impl ControlService {
             .llm_calls(limit)
             .await?
             .into_iter()
-            .map(|call| {
-                let route = call_route(&call.run_id);
-                CallSummary {
-                    call,
-                    call_kind: "provider_llm",
-                    route,
-                }
+            .map(|call| CallSummary {
+                call,
+                call_kind: "provider_llm",
+                route: "local_byok",
             })
             .collect::<Vec<_>>();
         calls.extend(
@@ -629,14 +555,13 @@ impl ControlService {
     pub async fn call(&self, call_id: &str) -> Result<CallDetail> {
         if let Some(call) = self.store.llm_call(call_id).await? {
             let cursor_trace = self.cursor_trace_detail(&call.run_id).await?;
-            let route = call_route(&call.run_id);
             return Ok(CallDetail {
                 request: self.store.llm_call_request(call_id).await?,
                 response_chunks: self.store.llm_call_chunks(call_id).await?,
                 call: CallSummary {
                     call,
                     call_kind: "provider_llm",
-                    route,
+                    route: "local_byok",
                 },
                 cursor_trace,
             });
@@ -695,17 +620,6 @@ impl ControlService {
         self.store.port_settings().await
     }
 
-    pub async fn external_api_settings(&self) -> Result<ExternalApiSettings> {
-        self.store.external_api_settings().await
-    }
-
-    pub async fn set_external_api_settings(
-        &self,
-        settings: ExternalApiSettings,
-    ) -> Result<ExternalApiSettings> {
-        self.store.set_external_api_settings(settings).await
-    }
-
     pub async fn set_ports(&self, settings: PortSettings) -> Result<PortSettings> {
         self.store.set_port_settings(settings).await?;
         Ok(settings)
@@ -740,14 +654,6 @@ impl ControlService {
         Ok(settings)
     }
 
-    pub async fn tab_settings(&self) -> Result<TabSettings> {
-        self.store.tab_settings().await
-    }
-
-    pub async fn set_tab_settings(&self, settings: TabSettings) -> Result<TabSettings> {
-        self.cursor_harness.set_tab_settings(settings).await
-    }
-
     pub async fn desktop_settings(&self) -> Result<DesktopSettings> {
         self.store.desktop_settings().await
     }
@@ -773,14 +679,6 @@ impl ControlService {
         settings: TokenPricingSettings,
     ) -> Result<TokenPricingSettings> {
         self.store.set_pricing_settings(settings).await
-    }
-}
-
-fn call_route(run_id: &str) -> &'static str {
-    if run_id.starts_with("external-api:") {
-        "external_api"
-    } else {
-        "local_byok"
     }
 }
 

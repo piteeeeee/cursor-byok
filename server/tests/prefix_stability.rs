@@ -140,7 +140,7 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
             .as_path(),
     )
     .unwrap();
-    assert_eq!(assets.mode(Mode::Agent).tools.len(), 21);
+    assert_eq!(assets.mode(Mode::Agent).tools.len(), 19);
     assert_eq!(
         assets
             .mode(Mode::Agent)
@@ -168,8 +168,6 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
             "FetchMcpResource",
             "SwitchMode",
             "CallMcpTool",
-            "SembleSearch",
-            "SembleFindRelated",
         ]
     );
     assert_mode(
@@ -191,10 +189,8 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
             "WebFetch",
             "WebSearch",
             "Write",
-            "SembleSearch",
-            "SembleFindRelated",
         ],
-        "98bb57a9ade7f1a572c5c5fe77a905a129d28ecfd42b8d318250f6486b09e1ec",
+        "b8cf941dec957f8e3547cf4c893d28bc4da037cb40d8e180b0a84e99df10418f",
     );
     assert_mode(
         &assets,
@@ -213,10 +209,8 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
             "Task",
             "FetchMcpResource",
             "CallMcpTool",
-            "SembleSearch",
-            "SembleFindRelated",
         ],
-        "9a7e0f9e0bd8ef0af01032fa311686f72c42ec260e3057f6fae5e68f5ed36fb8",
+        "4e6964cf3dcdf4dca81cc61e5fd8b1cf51441b0e2a91163568a20ad67e5ad477",
     );
     assert_mode(
         &assets,
@@ -237,10 +231,8 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
             "WebFetch",
             "WebSearch",
             "Write",
-            "SembleSearch",
-            "SembleFindRelated",
         ],
-        "98bb57a9ade7f1a572c5c5fe77a905a129d28ecfd42b8d318250f6486b09e1ec",
+        "b8cf941dec957f8e3547cf4c893d28bc4da037cb40d8e180b0a84e99df10418f",
     );
     assert_mode(
         &assets,
@@ -263,10 +255,8 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
             "WebSearch",
             "Write",
             "GenerateImage",
-            "SembleSearch",
-            "SembleFindRelated",
         ],
-        "976b309dd91e314d4916439ebb9da8995751d011532e39934a1da7593dc78ccb",
+        "b4eb2615bd5ff8bc75648bfb145d76db7654cfbba8a5cdfbffbdb29e1a6841d8",
     );
     assert_mode(
         &assets,
@@ -290,10 +280,8 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
             "SwitchMode",
             "UpdateCurrentStep",
             "CallMcpTool",
-            "SembleSearch",
-            "SembleFindRelated",
         ],
-        "6de1ee86a131ca093c7143f54fffcba2fc14b32ff45fd6f5e0df1347058ad744",
+        "489d1ca558c8583ed8ee0cb3185971807e0b9e4948fef250897f92b099f19ccd",
     );
     assert_mode(
         &assets,
@@ -303,7 +291,7 @@ fn every_prompt_mode_loads_the_captured_tool_set() {
     );
     assert_eq!(
         schema_digest(&assets.mode(Mode::Agent).tools),
-        "282a1dff7957090d0a75eac4a46474ac7cffa1b0937bdf97354544e729bb15c2"
+        "1e7e6f3abc338c4cfeff161916c1692dcf2730ab06374fd350f2de3381df0fc7"
     );
     let task = assets
         .mode(Mode::Agent)
@@ -545,8 +533,6 @@ fn subagent_uses_the_agent_prompt_and_only_the_captured_tool_delta() {
             "SwitchMode",
             "UpdateCurrentStep",
             "CallMcpTool",
-            "SembleSearch",
-            "SembleFindRelated",
         ]
     );
     assert!(!request.tools.iter().any(|tool| tool.name == "Task"));

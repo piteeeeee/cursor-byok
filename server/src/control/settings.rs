@@ -8,9 +8,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::store::{
-    CommitPromptLocale, CommitSettings, DesktopSettings, ExternalApiSettings, PortSettings,
-    ProxySettings, ProxySettingsInput, StatisticsStorage, StatisticsStorageScope, TabSettings,
-    TokenPricingSettings,
+    CommitPromptLocale, CommitSettings, DesktopSettings, PortSettings, ProxySettings,
+    ProxySettingsInput, StatisticsStorage, StatisticsStorageScope, TokenPricingSettings,
 };
 
 use super::{ControlService, ObservabilitySettings};
@@ -35,19 +34,6 @@ pub async fn update_ports(
     Json(settings): Json<PortSettings>,
 ) -> Result<Json<PortSettings>> {
     Ok(Json(service.set_ports(settings).await?))
-}
-
-pub async fn get_external_api(
-    State(service): State<ControlService>,
-) -> Result<Json<ExternalApiSettings>> {
-    Ok(Json(service.external_api_settings().await?))
-}
-
-pub async fn update_external_api(
-    State(service): State<ControlService>,
-    Json(settings): Json<ExternalApiSettings>,
-) -> Result<Json<ExternalApiSettings>> {
-    Ok(Json(service.set_external_api_settings(settings).await?))
 }
 
 pub async fn get_storage(State(service): State<ControlService>) -> Result<Json<StatisticsStorage>> {
@@ -81,17 +67,6 @@ pub async fn update_proxy(
     Json(settings): Json<ProxySettingsInput>,
 ) -> Result<Json<ProxySettings>> {
     Ok(Json(service.set_proxy_settings(settings).await?))
-}
-
-pub async fn get_tab(State(service): State<ControlService>) -> Result<Json<TabSettings>> {
-    Ok(Json(service.tab_settings().await?))
-}
-
-pub async fn update_tab(
-    State(service): State<ControlService>,
-    Json(settings): Json<TabSettings>,
-) -> Result<Json<TabSettings>> {
-    Ok(Json(service.set_tab_settings(settings).await?))
 }
 
 pub async fn get_desktop(State(service): State<ControlService>) -> Result<Json<DesktopSettings>> {
