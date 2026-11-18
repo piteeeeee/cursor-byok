@@ -153,6 +153,28 @@ fn history_image_count(history: &agent::ConversationHistory) -> usize {
         .sum()
 }
 
+fn decode_client_message(payload: &[u8]) -> Result<agent::AgentClientMessage> {
+    agent::AgentClientMessage::decode(payload).map_err(|error| {
+        if !cfg!(test) {
+            let path = "/tmp/byok-failed-append.hex";
+            if let Err(write_error) = std::fs::write(path, hex::encode(payload)) {
+                tracing::warn!(
+                    path,
+                    error = %write_error,
+                    "failed to write failed BidiAppend payload hex"
+                );
+            } else {
+                tracing::warn!(
+                    path,
+                    bytes = payload.len(),
+                    "dumped failed BidiAppend payload hex"
+                );
+            }
+        }
+        error.into()
+    })
+}
+
 pub fn decode(request: &ai::BidiAppendRequest) -> Result<DecodedAppend> {
     let request_id = request
         .request_id
@@ -161,11 +183,11 @@ pub fn decode(request: &ai::BidiAppendRequest) -> Result<DecodedAppend> {
         .filter(|id| !id.is_empty())
         .ok_or_else(|| Error::Protocol("BidiAppend request_id is required".into()))?;
     let message = match (request.data.is_empty(), request.data_binary.is_empty()) {
-        (true, false) => agent::AgentClientMessage::decode(request.data_binary.as_slice())?,
+        (true, false) => decode_client_message(request.data_binary.as_slice())?,
         (false, true) => {
             let payload = hex::decode(&request.data)
                 .map_err(|error| Error::Protocol(format!("invalid BidiAppend hex: {error}")))?;
-            agent::AgentClientMessage::decode(payload.as_slice())?
+            decode_client_message(payload.as_slice())?
         }
         (true, true) => {
             return Err(Error::Protocol(
@@ -351,5 +373,104 @@ mod tests {
         assert!(error
             .to_string()
             .contains("BidiAppend request_id is required"));
+    }
+
+    #[test]
+    fn decode_accepts_cursor_331_wire_run_request_with_non_empty_file_states() {
+        use std::collections::HashMap;
+
+        let mut file_states = HashMap::new();
+        file_states.insert("/workspace/src/main.rs".to_string(), b"blob-ref-1".to_vec());
+        let mut file_states_v2 = HashMap::new();
+        file_states_v2.insert(
+            "/workspace/src/main.rs".to_string(),
+            agent::FileStateStructure {
+                content: Some(b"content-hash".to_vec()),
+                initial_content: Some(b"initial-hash".to_vec()),
+            },
+        );
+
+        let state = agent::ConversationStateStructure {
+            root_prompt_messages_json: vec![b"{\"role\":\"system\"}".to_vec()],
+            file_states,
+            file_states_v2,
+            self_summary_count: 1,
+            read_paths: vec!["/workspace/README.md".into()],
+            ..Default::default()
+        };
+        // Append Cursor 3.31.3 fields (tags 34, 37, 55) that are not in agent_v1.proto
+        // to ensure unknown trailing fields alongside non-empty file_states decode cleanly.
+        let mut state_bytes = state.encode_to_vec();
+        prost::encoding::string::encode(34, &"ask-1".to_string(), &mut state_bytes);
+        prost::encoding::uint32::encode(37, &2, &mut state_bytes);
+        prost::encoding::bool::encode(55, &false, &mut state_bytes);
+
+        let mut run_request_bytes = Vec::new();
+        prost::encoding::bytes::encode(1, &state_bytes, &mut run_request_bytes);
+        let action_bytes = agent::ConversationAction {
+            action: Some(agent::conversation_action::Action::UserMessageAction(
+                agent::UserMessageAction {
+                    user_message: Some(agent::UserMessage {
+                        text: "hi".into(),
+                        message_id: "msg-331".into(),
+                        mode: agent::AgentMode::Agent as i32,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        prost::encoding::bytes::encode(2, &action_bytes, &mut run_request_bytes);
+        let requested_model_bytes = agent::RequestedModel {
+            model_id: "83f1333d63840a0c".into(),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        prost::encoding::bytes::encode(9, &requested_model_bytes, &mut run_request_bytes);
+        prost::encoding::string::encode(5, &"conv-331".to_string(), &mut run_request_bytes);
+        // Cursor 3.31.3 AgentRunRequest fields (tags 28, 37)
+        prost::encoding::bool::encode(28, &true, &mut run_request_bytes);
+        prost::encoding::bool::encode(37, &true, &mut run_request_bytes);
+
+        let mut client_msg_bytes = Vec::new();
+        prost::encoding::bytes::encode(1, &run_request_bytes, &mut client_msg_bytes);
+
+        let wire = ai::BidiAppendRequest {
+            data: String::new(),
+            request_id: Some(ai::BidiRequestId {
+                request_id: "req-331".into(),
+            }),
+            append_seqno: 0,
+            data_binary: client_msg_bytes,
+        }
+        .encode_to_vec();
+
+        let raw_request = ai::BidiAppendRequest::decode(wire.as_slice()).unwrap();
+        let decoded = decode(&raw_request).unwrap();
+        assert_eq!(decoded.request_id, "req-331");
+        assert_eq!(decoded.conversation_id(), Some("conv-331"));
+        assert_eq!(decoded.model_id(), Some("83f1333d63840a0c"));
+        let Some(agent::agent_client_message::Message::RunRequest(run_req)) =
+            decoded.message.message
+        else {
+            panic!("expected RunRequest");
+        };
+        let decoded_state = run_req.conversation_state.expect("conversation_state");
+        assert_eq!(
+            decoded_state
+                .file_states
+                .get("/workspace/src/main.rs")
+                .map(Vec::as_slice),
+            Some(b"blob-ref-1".as_slice())
+        );
+        assert_eq!(
+            decoded_state
+                .file_states_v2
+                .get("/workspace/src/main.rs")
+                .and_then(|fs| fs.content.as_deref()),
+            Some(b"content-hash".as_slice())
+        );
     }
 }
