@@ -377,3 +377,103 @@ async fn bidi_append_data_binary_routes_to_local_provider_and_streams_run_sse() 
     assert_eq!(collected_text, "pong from byok");
     assert!(saw_end_stream);
 }
+
+#[tokio::test]
+async fn bidi_append_declines_captured_cursor_331_run_inference_payload_with_permission_denied() {
+    let (_directory, store) = fixtures::temp_store().await;
+    let assets = PromptAssets::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("prompt/cursor")
+            .as_path(),
+    )
+    .unwrap();
+    let clients = NetworkClients::new(store.clone());
+    let registry = TransportRegistry::new(
+        store,
+        Arc::new(fake_provider::FakeProvider::default()),
+        PromptCompiler::new(assets),
+    );
+    let payload =
+        hex::decode(include_str!("fixtures/cursor_331_run_inference_client_message.hex").trim())
+            .unwrap();
+    let wire = ai::BidiAppendRequest {
+        data: String::new(),
+        request_id: Some(ai::BidiRequestId {
+            request_id: "run-inference-append".into(),
+        }),
+        append_seqno: 0,
+        data_binary: payload,
+    }
+    .encode_to_vec();
+
+    let response = cursor::router(registry, clients)
+        .unwrap()
+        .oneshot(
+            Request::post("/aiserver.v1.BidiService/BidiAppend")
+                .header(header::CONTENT_TYPE, "application/proto")
+                .body(Body::from(wire))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "permission_denied");
+    assert_eq!(
+        json["message"],
+        "InferenceService.RunInference is not enabled for this account"
+    );
+}
+
+#[tokio::test]
+async fn run_inference_sse_and_ws_upgrade_return_fallback_responses() {
+    let (_directory, store) = fixtures::temp_store().await;
+    let assets = PromptAssets::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("prompt/cursor")
+            .as_path(),
+    )
+    .unwrap();
+    let clients = NetworkClients::new(store.clone());
+    let registry = TransportRegistry::new(
+        store,
+        Arc::new(fake_provider::FakeProvider::default()),
+        PromptCompiler::new(assets),
+    );
+    let app = cursor::router(registry, clients).unwrap();
+
+    let req_frame = connect::encode_message(&pb::BidiRequestId {
+        request_id: "run-inference-sse".into(),
+    })
+    .unwrap();
+    let sse_resp = app
+        .clone()
+        .oneshot(
+            Request::post("/aiserver.v1.InferenceService/RunInferenceSSE")
+                .header(header::CONTENT_TYPE, "application/connect+proto")
+                .body(Body::from(req_frame))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sse_resp.status(), StatusCode::OK);
+    let body = to_bytes(sse_resp.into_body(), 4096).await.unwrap();
+    let frames = connect::decode_frames(&body).unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].0, connect::END_STREAM_FLAG);
+    let json: serde_json::Value = serde_json::from_slice(&frames[0].1).unwrap();
+    assert_eq!(json["error"]["code"], "permission_denied");
+    assert_eq!(
+        json["error"]["message"],
+        "InferenceService.RunInference is not enabled for this account"
+    );
+
+    let ws_resp = app
+        .oneshot(Request::get("/agent/v1/run").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(ws_resp.status(), StatusCode::UPGRADE_REQUIRED);
+}

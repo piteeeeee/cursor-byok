@@ -29,7 +29,9 @@ impl From<crate::Error> for RunFailure {
     fn from(error: crate::Error) -> Self {
         use crate::Error;
         match error {
-            Error::Protocol(message) | Error::Config(message) => Self::Protocol(message),
+            Error::Protocol(message)
+            | Error::Config(message)
+            | Error::PermissionDenied(message) => Self::Protocol(message),
             Error::Provider(message) => Self::Provider(message),
             Error::Store(message) => Self::Store(message),
             Error::Cancelled => Self::Client("run was cancelled".into()),

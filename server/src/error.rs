@@ -13,6 +13,8 @@ pub enum Error {
     Config(String),
     #[error("protocol error: {0}")]
     Protocol(String),
+    #[error("{0}")]
+    PermissionDenied(String),
     #[error("provider error: {0}")]
     Provider(String),
     #[error("store error: {0}")]
@@ -47,6 +49,7 @@ impl IntoResponse for Error {
             Self::Config(_) | Self::Protocol(_) | Self::Decode(_) | Self::Json(_) => {
                 StatusCode::BAD_REQUEST
             }
+            Self::PermissionDenied(_) => StatusCode::FORBIDDEN,
             Self::RunNotFound(_) => StatusCode::NOT_FOUND,
             Self::Provider(_) | Self::Http(_) => StatusCode::BAD_GATEWAY,
             Self::Cancelled => StatusCode::CONFLICT,
@@ -61,6 +64,7 @@ impl IntoResponse for Error {
         tracing::warn!(%status, error = %self, "request failed");
         let code = match status {
             StatusCode::BAD_REQUEST => "invalid_argument",
+            StatusCode::FORBIDDEN => "permission_denied",
             StatusCode::NOT_FOUND => "not_found",
             StatusCode::CONFLICT => "aborted",
             StatusCode::BAD_GATEWAY => "unavailable",

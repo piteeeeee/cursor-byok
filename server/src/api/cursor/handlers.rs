@@ -46,6 +46,19 @@ fn router_with_proxy(
     let free_entitlements = FreeEntitlementCache::default();
     Router::new()
         .route("/__byok-api__/healthz", get(health))
+        .route("/agent/v1/run", get(refuse_agent_websocket))
+        .route(
+            "/aiserver.v1.InferenceService/RunInferenceSSE",
+            post(refuse_run_inference_stream),
+        )
+        .route(
+            "/aiserver.v1.InferenceService/RunInference",
+            post(refuse_run_inference_stream),
+        )
+        .route(
+            "/aiserver.v1.InferenceService/RunInferencePoll",
+            post(refuse_run_inference_stream),
+        )
         .route("/agent.v1.AgentService/RunSSE", post(run_sse_handler))
         .route("/aiserver.v1.BidiService/BidiAppend", post(bidi_handler))
         .route(
@@ -169,6 +182,39 @@ fn router_with_proxy(
 
 async fn health() -> StatusCode {
     StatusCode::NO_CONTENT
+}
+
+/// Refuses `wss://api2.cursor.sh/agent/v1/run` upgrades with `426 Upgrade Required`
+/// so Cursor's `AgentRunWebSocketSelection` (`426 === upgradeStatus`) records
+/// `upgrade-refused` and falls back to HTTP/1.1 `RunSSE` + `BidiAppend` even if a
+/// stale Statsig cache still had `nal_websocket_client = true` before refresh.
+async fn refuse_agent_websocket() -> StatusCode {
+    StatusCode::UPGRADE_REQUIRED
+}
+
+/// Refuses `InferenceService/RunInference*` streams with Connect `permission_denied`
+/// and the exact denial message Cursor's `enrollmentLatch` (`cursor-agent-host`)
+/// recognizes so a window with a stale `agent_host_local_loop = true` cache falls
+/// back immediately within the same turn to `AgentService/RunSSE`.
+async fn refuse_run_inference_stream() -> Result<Response<Body>> {
+    tracing::info!(
+        "declining InferenceService/RunInference stream so Cursor falls back to AgentService/RunSSE"
+    );
+    let payload = connect::encode_error_end_stream(&connect::ConnectStreamError {
+        code: connect::ConnectCode::PermissionDenied,
+        message: bidi::RUN_INFERENCE_DISABLED_MESSAGE.into(),
+        details: Vec::new(),
+    })?;
+    let mut response = Response::new(Body::from(payload));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/connect+proto"),
+    );
+    response
+        .headers_mut()
+        .insert("connect-protocol-version", HeaderValue::from_static("1"));
+    Ok(response)
 }
 
 /// `NetworkService/IsConnected` probe. Cursor's always-local extension checks

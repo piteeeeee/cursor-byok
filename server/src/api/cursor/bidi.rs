@@ -153,8 +153,57 @@ fn history_image_count(history: &agent::ConversationHistory) -> usize {
         .sum()
 }
 
+pub const RUN_INFERENCE_DISABLED_MESSAGE: &str =
+    "InferenceService.RunInference is not enabled for this account";
+
+#[derive(Clone, PartialEq, Message)]
+struct RunInferenceClientMessageProbe {
+    #[prost(message, tag = "1")]
+    run_request: Option<RunInferenceIdField>,
+    #[prost(message, tag = "2")]
+    invoke_model: Option<RunInferenceIdField>,
+    #[prost(message, tag = "3")]
+    cancel_invocation: Option<RunInferenceIdField>,
+    #[prost(bytes = "vec", optional, tag = "9")]
+    resolve_subagent_models: Option<Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "10")]
+    client_first_call_timings: Option<Vec<u8>>,
+    #[prost(message, tag = "11")]
+    delta_base_seed: Option<RunInferenceIdField>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct RunInferenceIdField {
+    #[prost(string, tag = "1")]
+    id: String,
+}
+
+fn is_ascii_id(field: Option<&RunInferenceIdField>) -> bool {
+    field
+        .is_some_and(|value| !value.id.is_empty() && value.id.bytes().all(|b| b.is_ascii_graphic()))
+}
+
+fn is_run_inference_client_message(payload: &[u8]) -> bool {
+    let Ok(probe) = RunInferenceClientMessageProbe::decode(payload) else {
+        return false;
+    };
+    is_ascii_id(probe.run_request.as_ref())
+        || is_ascii_id(probe.invoke_model.as_ref())
+        || is_ascii_id(probe.cancel_invocation.as_ref())
+        || is_ascii_id(probe.delta_base_seed.as_ref())
+        || probe.resolve_subagent_models.is_some()
+        || probe.client_first_call_timings.is_some()
+}
+
 fn decode_client_message(payload: &[u8]) -> Result<agent::AgentClientMessage> {
     agent::AgentClientMessage::decode(payload).map_err(|error| {
+        if is_run_inference_client_message(payload) {
+            tracing::info!(
+                bytes = payload.len(),
+                "declining RunInference BidiAppend payload so Cursor falls back to AgentService/RunSSE"
+            );
+            return Error::PermissionDenied(RUN_INFERENCE_DISABLED_MESSAGE.into());
+        }
         if !cfg!(test) {
             let path = "/tmp/byok-failed-append.hex";
             if let Err(write_error) = std::fs::write(path, hex::encode(payload)) {
@@ -472,5 +521,27 @@ mod tests {
                 .and_then(|fs| fs.content.as_deref()),
             Some(b"content-hash".as_slice())
         );
+    }
+
+    #[test]
+    fn decode_declines_captured_cursor_331_run_inference_client_message_with_permission_denied() {
+        let payload = hex::decode(
+            include_str!("../../../tests/fixtures/cursor_331_run_inference_client_message.hex")
+                .trim(),
+        )
+        .expect("valid captured hex fixture");
+        let request = ai::BidiAppendRequest {
+            data: String::new(),
+            request_id: Some(ai::BidiRequestId {
+                request_id: "req-run-inference".into(),
+            }),
+            append_seqno: 0,
+            data_binary: payload,
+        };
+        let error = decode(&request)
+            .err()
+            .expect("RunInferenceClientMessage must trigger permission_denied fallback");
+        assert!(matches!(error, Error::PermissionDenied(_)));
+        assert_eq!(error.to_string(), RUN_INFERENCE_DISABLED_MESSAGE);
     }
 }
