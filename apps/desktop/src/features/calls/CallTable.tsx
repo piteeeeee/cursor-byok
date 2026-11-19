@@ -138,12 +138,6 @@ export function CallTable({ calls, onDetails }: { calls: LlmCall[]; onDetails: (
       render: (call) => call.tool_count,
     },
     {
-      key: "detailed",
-      header: t("详细记录"),
-      render: (call) => (call.detailed ? t("是") : t("否")),
-    },
-
-    {
       key: "error_kind",
       header: "Error Kind",
       render: (call) => value(call.error_kind),

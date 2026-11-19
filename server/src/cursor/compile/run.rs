@@ -87,39 +87,6 @@ pub(crate) async fn prepare(
         None
     };
     stages.mark("hydrate conversation state");
-    if let Some(trace) = blob_sync.trace() {
-        let hydrated_messages = base_messages.as_deref().unwrap_or_default();
-        let hydrated_images = hydrated_messages
-            .iter()
-            .map(|message| match &message.content {
-                MessageContent::Parts { parts } => parts
-                    .iter()
-                    .filter(|part| matches!(part, ContentPart::Image { .. }))
-                    .count(),
-                _ => 0,
-            })
-            .sum::<usize>();
-        let history = request
-            .action
-            .as_ref()
-            .and_then(|action| action.action.as_ref())
-            .and_then(|action| match action {
-                pb::conversation_action::Action::UserMessageAction(action) => {
-                    action.conversation_history.as_ref()
-                }
-                _ => None,
-            });
-        let summary = serde_json::json!({
-            "checkpoint_root_count": request.conversation_state.as_ref().map_or(0, |state| state.root_prompt_messages_json.len()),
-            "checkpoint_turn_count": request.conversation_state.as_ref().map_or(0, |state| state.turns.len()),
-            "conversation_history_message_count": history.map_or(0, |history| history.messages.len()),
-            "hydrated_message_count": hydrated_messages.len(),
-            "hydrated_image_count": hydrated_images,
-            "selected_source": "root_prompt_messages_json",
-        });
-        let encoded = serde_json::to_vec(&summary)?;
-        trace.artifact("history_projection", "byok_server", &encoded, summary);
-    }
     let request_context = context::hydrate(request, context_sync).await?;
     stages.mark("request context");
     let ActionProjection {

@@ -11,11 +11,7 @@ use std::{
 use tokio::sync::{mpsc, Mutex, Notify};
 
 use crate::{
-    cursor::{
-        conversation::ConversationRegistry, prompting::PromptCompiler,
-        services::observability::CursorTraceService,
-    },
-    plugin::PluginRegistry,
+    cursor::{conversation::ConversationRegistry, prompting::PromptCompiler},
     provider::Provider,
     search::WebCache,
     store::Store,
@@ -35,9 +31,7 @@ struct RegistryInner {
     upstream: Mutex<HashMap<String, u64>>,
     route_changed: Notify,
     store: Store,
-    traces: CursorTraceService,
     web_cache: WebCache,
-    plugins: Option<PluginRegistry>,
     conversations: ConversationRegistry,
 }
 
@@ -64,17 +58,7 @@ impl TransportRegistry {
         compiler: PromptCompiler,
         web_cache: WebCache,
     ) -> Self {
-        Self::build(store, provider, compiler, web_cache, None)
-    }
-
-    pub fn with_plugins(
-        store: Store,
-        provider: Arc<dyn Provider>,
-        compiler: PromptCompiler,
-        web_cache: WebCache,
-        plugins: PluginRegistry,
-    ) -> Self {
-        Self::build(store, provider, compiler, web_cache, Some(plugins))
+        Self::build(store, provider, compiler, web_cache)
     }
 
     fn build(
@@ -82,7 +66,6 @@ impl TransportRegistry {
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
         web_cache: WebCache,
-        plugins: Option<PluginRegistry>,
     ) -> Self {
         Self {
             inner: Arc::new(RegistryInner {
@@ -90,7 +73,6 @@ impl TransportRegistry {
                 next_local_generation: AtomicU64::new(1),
                 upstream: Mutex::new(HashMap::new()),
                 route_changed: Notify::new(),
-                traces: CursorTraceService::new(store.clone()),
                 conversations: ConversationRegistry::new(
                     store.clone(),
                     provider,
@@ -99,7 +81,6 @@ impl TransportRegistry {
                 ),
                 store,
                 web_cache,
-                plugins,
             }),
         }
     }
@@ -108,19 +89,8 @@ impl TransportRegistry {
         &self.inner.store
     }
 
-    pub fn trace(
-        &self,
-        request_id: &str,
-    ) -> crate::cursor::services::observability::CursorTraceRecorder {
-        self.inner.traces.recorder(request_id)
-    }
-
     pub fn web_cache(&self) -> &WebCache {
         &self.inner.web_cache
-    }
-
-    pub fn plugins(&self) -> Option<&PluginRegistry> {
-        self.inner.plugins.as_ref()
     }
 
     pub fn conversations(&self) -> &ConversationRegistry {
@@ -145,9 +115,7 @@ impl TransportRegistry {
         local.remove(request_id);
         let (commands, receiver) = mpsc::channel(128);
         let output = Arc::new(OutputHub::default());
-        let trace = self.inner.traces.recorder(request_id);
-        trace.resume();
-        let handle = TransportHandle::new(request_id.into(), commands, output, trace);
+        let handle = TransportHandle::new(request_id.into(), commands, output);
         let generation = self
             .inner
             .next_local_generation

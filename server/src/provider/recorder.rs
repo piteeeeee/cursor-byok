@@ -1,7 +1,7 @@
-//! Records provider requests, responses, usage, and timing.
+//! Records provider call timing and usage.
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::Instant,
@@ -11,30 +11,11 @@ use tokio::sync::Mutex;
 
 use crate::{
     model::{NewLlmCall, Usage},
-    store::{BufferedLlmChunk, Store},
+    store::Store,
     Result,
 };
 
 use super::{is_valid_response_event, FinishReason, ModelEvent};
-
-pub(crate) fn recorded_headers(
-    config: &crate::config::ProviderConfig,
-    defaults: &[(&str, &str)],
-) -> serde_json::Value {
-    let mut output = serde_json::Map::new();
-    for (name, value) in defaults {
-        output.insert((*name).into(), (*value).into());
-    }
-    for (name, value) in &config.custom_headers {
-        if crate::model::is_sensitive_header(name.as_str()) {
-            continue;
-        }
-        if let Ok(value) = value.to_str() {
-            output.insert(name.as_str().into(), value.into());
-        }
-    }
-    serde_json::Value::Object(output)
-}
 
 #[derive(Clone)]
 pub struct CallRecorder {
@@ -69,7 +50,6 @@ impl Drop for CancelOnDrop {
 struct Inner {
     store: Store,
     base_call: NewLlmCall,
-    detailed: bool,
     attempt: Mutex<AttemptState>,
     next_generation: AtomicU64,
     finished: AtomicBool,
@@ -78,8 +58,7 @@ struct Inner {
 struct AttemptState {
     call_id: String,
     started: Instant,
-    next_chunk: AtomicI64,
-    chunks: ChunkBuffer,
+    stream: StreamBuffer,
     first_text_recorded: AtomicBool,
     first_valid_response_recorded: AtomicBool,
 }
@@ -89,18 +68,19 @@ impl AttemptState {
         Self {
             call_id,
             started: Instant::now(),
-            next_chunk: AtomicI64::new(0),
-            chunks: ChunkBuffer::default(),
+            stream: StreamBuffer::default(),
             first_text_recorded: AtomicBool::new(false),
             first_valid_response_recorded: AtomicBool::new(false),
         }
     }
 }
 
+/// Accumulates response stream volume between database writes so a long
+/// stream costs one `UPDATE` per window instead of one per chunk.
 #[derive(Default)]
-struct ChunkBuffer {
-    chunks: Vec<BufferedLlmChunk>,
+struct StreamBuffer {
     bytes: usize,
+    events: usize,
     first_chunk_at: Option<Instant>,
     generation: u64,
 }
@@ -110,23 +90,17 @@ const MAX_BUFFERED_BYTES: usize = 256 * 1024;
 const MAX_BUFFER_AGE: std::time::Duration = std::time::Duration::from_millis(50);
 
 impl CallRecorder {
-    pub async fn start(store: Store, mut call: NewLlmCall) -> Result<Self> {
-        call.detailed = store.detailed_logging().await?;
+    pub async fn start(store: Store, call: NewLlmCall) -> Result<Self> {
         store.start_llm_call(&call).await?;
         Ok(Self {
             inner: Arc::new(Inner {
                 store,
                 base_call: call.clone(),
-                detailed: call.detailed,
                 attempt: Mutex::new(AttemptState::new(call.call_id.clone())),
                 next_generation: AtomicU64::new(0),
                 finished: AtomicBool::new(false),
             }),
         })
-    }
-
-    pub fn detailed(&self) -> bool {
-        self.inner.detailed
     }
 
     pub fn is_finished(&self) -> bool {
@@ -139,15 +113,11 @@ impl CallRecorder {
         }
     }
 
-    pub async fn request(
-        &self,
-        headers: serde_json::Value,
-        body: &serde_json::Value,
-    ) -> Result<()> {
+    pub async fn request(&self, body: &serde_json::Value) -> Result<()> {
         let attempt = self.inner.attempt.lock().await;
         self.inner
             .store
-            .record_llm_request(&attempt.call_id, &headers, body, self.inner.detailed)
+            .record_llm_request(&attempt.call_id, body)
             .await?;
         Ok(())
     }
@@ -165,31 +135,25 @@ impl CallRecorder {
         if self.is_finished() {
             return Ok(());
         }
-        let seq = attempt.next_chunk.fetch_add(1, Ordering::Relaxed);
-        let schedule_flush = if attempt.chunks.chunks.is_empty() {
-            attempt.chunks.generation = self
+        let schedule_flush = if attempt.stream.events == 0 {
+            attempt.stream.generation = self
                 .inner
                 .next_generation
                 .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1);
-            attempt.chunks.first_chunk_at = Some(Instant::now());
-            Some(attempt.chunks.generation)
+            attempt.stream.first_chunk_at = Some(Instant::now());
+            Some(attempt.stream.generation)
         } else {
             None
         };
-        attempt.chunks.bytes += data.len();
-        let elapsed = elapsed_ms(attempt.started);
-        attempt.chunks.chunks.push(if self.inner.detailed {
-            BufferedLlmChunk::new(seq, elapsed, data)
-        } else {
-            BufferedLlmChunk::metrics(seq, elapsed, data.len())
-        });
+        attempt.stream.bytes += data.len();
+        attempt.stream.events += 1;
         let expired = attempt
-            .chunks
+            .stream
             .first_chunk_at
             .is_some_and(|started| started.elapsed() >= MAX_BUFFER_AGE);
-        if attempt.chunks.chunks.len() >= MAX_BUFFERED_CHUNKS
-            || attempt.chunks.bytes >= MAX_BUFFERED_BYTES
+        if attempt.stream.events >= MAX_BUFFERED_CHUNKS
+            || attempt.stream.bytes >= MAX_BUFFERED_BYTES
             || expired
         {
             self.flush_locked(&mut attempt).await?;
@@ -200,7 +164,7 @@ impl CallRecorder {
             tokio::spawn(async move {
                 tokio::time::sleep(MAX_BUFFER_AGE).await;
                 if let Err(error) = recorder.flush_generation(generation).await {
-                    tracing::warn!(call_id = recorder.call_id(), %error, "failed to flush LLM response chunks");
+                    tracing::warn!(call_id = recorder.call_id(), %error, "failed to flush LLM stream totals");
                 }
             });
         }
@@ -314,29 +278,29 @@ impl CallRecorder {
 
     async fn flush_generation(&self, generation: u64) -> Result<()> {
         let mut attempt = self.inner.attempt.lock().await;
-        if attempt.chunks.generation != generation {
+        if attempt.stream.generation != generation {
             return Ok(());
         }
         self.flush_locked(&mut attempt).await
     }
 
     async fn flush_locked(&self, attempt: &mut AttemptState) -> Result<()> {
-        let buffer = &mut attempt.chunks;
-        if buffer.chunks.is_empty() {
+        let buffer = &mut attempt.stream;
+        if buffer.events == 0 {
             return Ok(());
         }
-        let chunks = std::mem::take(&mut buffer.chunks);
-        buffer.bytes = 0;
+        let bytes = std::mem::take(&mut buffer.bytes);
+        let events = std::mem::take(&mut buffer.events);
         buffer.first_chunk_at = None;
         if let Err(error) = self
             .inner
             .store
-            .record_llm_chunks(&attempt.call_id, &chunks, self.inner.detailed)
+            .record_llm_stream_totals(&attempt.call_id, bytes as i64, events as i64)
             .await
         {
-            buffer.bytes = chunks.iter().map(|chunk| chunk.byte_count).sum();
+            buffer.bytes = bytes;
+            buffer.events = events;
             buffer.first_chunk_at = Some(Instant::now());
-            buffer.chunks = chunks;
             return Err(error);
         }
         Ok(())
@@ -434,7 +398,6 @@ mod tests {
                 fast: false,
                 message_count: 1,
                 tool_count: 0,
-                detailed: false,
             },
         )
         .await

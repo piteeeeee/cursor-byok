@@ -13,9 +13,8 @@ use crate::{
 
 use super::{
     attempt::{send_once, Attempt},
-    map_sse_error, merge_extra_params, provider_event_error,
-    recorder::recorded_headers,
-    CallRecorder, FinishReason, ModelEvent, Provider, ProviderStream,
+    map_sse_error, merge_extra_params, provider_event_error, CallRecorder, FinishReason,
+    ModelEvent, Provider, ProviderStream,
 };
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 65_000;
@@ -83,12 +82,8 @@ impl Provider for AnthropicProvider {
             }
             apply_model(&mut body, &request.model)?;
             merge_extra_params(&mut body, &request.model.extra_params)?;
-            let request_headers = recorded_headers(
-                &config,
-                &[("content-type", "application/json"), ("anthropic-version", "2023-06-01")],
-            );
             if let Some(recorder) = &recorder {
-                recorder.request(request_headers.clone(), &body).await?;
+                recorder.request(&body).await?;
             }
             let attempt = send_once(
                 "Anthropic",

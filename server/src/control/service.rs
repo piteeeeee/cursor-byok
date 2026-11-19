@@ -5,7 +5,6 @@ use std::{
     time::Instant,
 };
 
-use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -15,16 +14,14 @@ use url::Url;
 use crate::{
     local_app::CursorHarness,
     model::{
-        ContentPart, CursorRunTraceArtifact, CursorRunTraceSummary, LlmCallRequest,
-        LlmCallResponseChunk, LlmCallSummary, ModelConfig, ModelConfigInput, ModelInvocation,
-        ModelRequest, ModelSpec, ModelType, Overview, ProjectedContent, ProjectedMessage,
-        PromptSpec, ProviderType, Role,
+        ContentPart, LlmCallSummary, ModelConfig, ModelConfigInput, ModelInvocation, ModelRequest,
+        ModelSpec, ModelType, Overview, ProjectedContent, ProjectedMessage, PromptSpec,
+        ProviderType, Role,
     },
-    plugin::{PluginDescriptor, PluginRegistry, PluginRuntime, PluginRuntimeStatus},
     provider::{is_valid_response_event, ModelEvent, Provider},
     store::{
-        CommitSettings, DesktopSettings, PortSettings, ProxySettings, ProxySettingsInput,
-        StatisticsStorage, Store, TokenPricingSettings,
+        DesktopSettings, PortSettings, ProxySettings, ProxySettingsInput, StatisticsStorage, Store,
+        TokenPricingSettings,
     },
     Error, Result,
 };
@@ -34,8 +31,6 @@ pub struct ControlService {
     store: Store,
     cursor_harness: CursorHarness,
     provider: Arc<dyn Provider>,
-    plugin_runtime: PluginRuntime,
-    plugins: PluginRegistry,
     clients: crate::network::NetworkClients,
     model_tests: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
 }
@@ -105,9 +100,6 @@ pub struct ModelConnectivityResult {
 #[derive(Clone, Debug, Serialize)]
 pub struct CallDetail {
     pub call: CallSummary,
-    pub request: Option<LlmCallRequest>,
-    pub response_chunks: Vec<LlmCallResponseChunk>,
-    pub cursor_trace: Option<CursorTraceDetail>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -118,43 +110,16 @@ pub struct CallSummary {
     pub route: &'static str,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct CursorTraceDetail {
-    pub trace: CursorRunTraceSummary,
-    pub artifacts: Vec<CursorTraceArtifactDetail>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct CursorTraceArtifactDetail {
-    pub seq: i64,
-    pub artifact_type: String,
-    pub source: String,
-    pub metadata: serde_json::Value,
-    pub created_at_ms: i64,
-    pub byte_count: usize,
-    pub encoding: &'static str,
-    pub data: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct ObservabilitySettings {
-    pub detailed: bool,
-}
-
 impl ControlService {
     pub fn new(
         store: Store,
         provider: Arc<dyn Provider>,
-        plugin_runtime: PluginRuntime,
-        plugins: PluginRegistry,
         clients: crate::network::NetworkClients,
     ) -> Result<Self> {
         Ok(Self {
             cursor_harness: CursorHarness::new(store.clone())?,
             store,
             provider,
-            plugin_runtime,
-            plugins,
             clients,
             model_tests: Arc::new(Mutex::new(BTreeMap::new())),
         })
@@ -162,116 +127,6 @@ impl ControlService {
 
     pub fn cursor_harness(&self) -> &CursorHarness {
         &self.cursor_harness
-    }
-
-    pub async fn plugins(&self) -> Vec<PluginDescriptor> {
-        self.plugins.plugins().await
-    }
-
-    pub async fn plugin_oauth_begin(
-        &self,
-        plugin_id: &str,
-        resource_type: &str,
-        method_id: &str,
-    ) -> Result<crate::plugin::OAuthBeginResponse> {
-        self.plugins
-            .oauth_begin(plugin_id, resource_type, method_id)
-            .await
-    }
-
-    pub async fn plugin_oauth_poll(
-        &self,
-        session_id: &str,
-    ) -> Result<crate::plugin::OAuthPollResponse> {
-        self.plugins.oauth_poll(session_id).await
-    }
-
-    pub async fn plugin_import(
-        &self,
-        plugin_id: &str,
-        resource_type: &str,
-        files: serde_json::Value,
-    ) -> Result<crate::plugin::ImportResponse> {
-        self.plugins
-            .import_resources(plugin_id, resource_type, files)
-            .await
-    }
-
-    pub async fn plugin_export_resources(
-        &self,
-        plugin_id: &str,
-        resource_type: &str,
-    ) -> Result<serde_json::Value> {
-        self.plugins
-            .export_resources(plugin_id, resource_type)
-            .await
-    }
-
-    pub async fn plugin_refresh_resource(
-        &self,
-        plugin_id: &str,
-        resource_type: &str,
-        resource_id: &str,
-    ) -> Result<()> {
-        self.plugins
-            .refresh_resource(plugin_id, resource_type, resource_id)
-            .await
-    }
-
-    pub async fn plugin_resource_action(
-        &self,
-        plugin_id: &str,
-        resource_type: &str,
-        resource_id: &str,
-        action_id: &str,
-        input: serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        self.plugins
-            .resource_action(plugin_id, resource_type, resource_id, action_id, input)
-            .await
-    }
-
-    pub async fn plugin_delete_resource(
-        &self,
-        plugin_id: &str,
-        resource_type: &str,
-        resource_id: &str,
-    ) -> Result<()> {
-        self.plugins
-            .delete_resource(plugin_id, resource_type, resource_id)
-            .await
-    }
-
-    pub async fn plugin_sync_models(&self, plugin_id: &str, provider_id: &str) -> Result<usize> {
-        self.plugins.sync_models(plugin_id, provider_id).await
-    }
-
-    pub async fn plugin_set_model_enabled(
-        &self,
-        plugin_id: &str,
-        provider_id: &str,
-        model_id: &str,
-        enabled: bool,
-    ) -> Result<()> {
-        self.plugins
-            .set_model_enabled(plugin_id, provider_id, model_id, enabled)
-            .await
-    }
-
-    pub async fn remove_plugin_configuration(&self, plugin_id: &str) -> Result<()> {
-        self.plugins.remove(plugin_id).await
-    }
-
-    pub fn plugin_runtime_status(&self) -> PluginRuntimeStatus {
-        self.plugin_runtime.status()
-    }
-
-    pub fn initialize_plugin_runtime(&self) -> PluginRuntimeStatus {
-        self.plugin_runtime.initialize(self.store.clone())
-    }
-
-    pub fn cancel_plugin_runtime_initialization(&self) -> PluginRuntimeStatus {
-        self.plugin_runtime.cancel_initialization()
     }
 
     pub async fn models(&self) -> Result<Vec<ModelConfig>> {
@@ -354,19 +209,13 @@ impl ControlService {
         const TEST_PROMPT: &str = "Output the numbers 1 through 120 separated by a single space. No commas, no newlines, no explanation.";
 
         let mut model = ModelSpec::new(model_hash);
-        if model_hash.starts_with(crate::plugin::ADAPTER_ID_PREFIX) {
-            let descriptor = self.plugins.model_descriptor(model_hash).await?;
-            model.display_name = Some(descriptor.display_name);
-            model.max_output_tokens = Some(descriptor.max_output_tokens.unwrap_or(65_536));
-        } else {
-            let configured = self
-                .store
-                .model(model_hash)
-                .await?
-                .ok_or_else(|| Error::RunNotFound(format!("model {model_hash}")))?;
-            configured.configure(&mut model);
-            model.max_output_tokens = Some(configured.max_output_tokens().unwrap_or(65_536));
-        }
+        let configured = self
+            .store
+            .model(model_hash)
+            .await?
+            .ok_or_else(|| Error::RunNotFound(format!("model {model_hash}")))?;
+        configured.configure(&mut model);
+        model.max_output_tokens = Some(configured.max_output_tokens().unwrap_or(65_536));
         let call_id = format!("model-test-{}", uuid::Uuid::new_v4());
         let invocation = ModelInvocation {
             call_id: call_id.clone(),
@@ -529,7 +378,7 @@ impl ControlService {
     }
 
     pub async fn calls(&self, limit: i64) -> Result<Vec<CallSummary>> {
-        let mut calls = self
+        Ok(self
             .store
             .llm_calls(limit)
             .await?
@@ -539,81 +388,22 @@ impl ControlService {
                 call_kind: "provider_llm",
                 route: "local_byok",
             })
-            .collect::<Vec<_>>();
-        calls.extend(
-            self.store
-                .official_cursor_traces(limit)
-                .await?
-                .into_iter()
-                .map(official_call),
-        );
-        calls.sort_by_key(|call| std::cmp::Reverse(call.call.created_at_ms));
-        calls.truncate(limit.clamp(1, 500) as usize);
-        Ok(calls)
+            .collect())
     }
 
     pub async fn call(&self, call_id: &str) -> Result<CallDetail> {
-        if let Some(call) = self.store.llm_call(call_id).await? {
-            let cursor_trace = self.cursor_trace_detail(&call.run_id).await?;
-            return Ok(CallDetail {
-                request: self.store.llm_call_request(call_id).await?,
-                response_chunks: self.store.llm_call_chunks(call_id).await?,
-                call: CallSummary {
-                    call,
-                    call_kind: "provider_llm",
-                    route: "local_byok",
-                },
-                cursor_trace,
-            });
-        }
-        let request_id = call_id.strip_prefix("cursor:").unwrap_or(call_id);
-        let trace = self
+        let call = self
             .store
-            .cursor_trace(request_id)
+            .llm_call(call_id)
             .await?
-            .filter(|trace| trace.route == "cursor_official")
             .ok_or_else(|| Error::RunNotFound(format!("call {call_id}")))?;
         Ok(CallDetail {
-            call: official_call(trace.clone()),
-            request: None,
-            response_chunks: Vec::new(),
-            cursor_trace: Some(self.cursor_trace_detail_from(trace).await?),
+            call: CallSummary {
+                call,
+                call_kind: "provider_llm",
+                route: "local_byok",
+            },
         })
-    }
-
-    async fn cursor_trace_detail(&self, request_id: &str) -> Result<Option<CursorTraceDetail>> {
-        let Some(trace) = self.store.cursor_trace(request_id).await? else {
-            return Ok(None);
-        };
-        Ok(Some(self.cursor_trace_detail_from(trace).await?))
-    }
-
-    async fn cursor_trace_detail_from(
-        &self,
-        trace: CursorRunTraceSummary,
-    ) -> Result<CursorTraceDetail> {
-        let artifacts = self
-            .store
-            .cursor_trace_artifacts(&trace.request_id)
-            .await?
-            .into_iter()
-            .map(cursor_artifact)
-            .collect();
-        Ok(CursorTraceDetail { trace, artifacts })
-    }
-
-    pub async fn observability(&self) -> Result<ObservabilitySettings> {
-        Ok(ObservabilitySettings {
-            detailed: self.store.detailed_logging().await?,
-        })
-    }
-
-    pub async fn set_observability(
-        &self,
-        settings: ObservabilitySettings,
-    ) -> Result<ObservabilitySettings> {
-        self.store.set_detailed_logging(settings.detailed).await?;
-        Ok(settings)
     }
 
     pub async fn ports(&self) -> Result<PortSettings> {
@@ -631,10 +421,6 @@ impl ControlService {
 
     pub async fn clear_statistics_storage(&self) -> Result<StatisticsStorage> {
         self.store.clear_statistics_storage().await
-    }
-
-    pub async fn clear_all_statistics_storage(&self) -> Result<StatisticsStorage> {
-        self.store.clear_all_statistics_storage().await
     }
 
     pub async fn proxy_settings(&self) -> Result<ProxySettings> {
@@ -662,14 +448,6 @@ impl ControlService {
         self.store.set_desktop_settings(settings).await
     }
 
-    pub async fn commit_settings(&self) -> Result<CommitSettings> {
-        self.store.commit_settings().await
-    }
-
-    pub async fn set_commit_settings(&self, settings: CommitSettings) -> Result<CommitSettings> {
-        self.store.set_commit_settings(settings).await
-    }
-
     pub async fn pricing_settings(&self) -> Result<TokenPricingSettings> {
         self.store.pricing_settings().await
     }
@@ -680,95 +458,6 @@ impl ControlService {
     ) -> Result<TokenPricingSettings> {
         self.store.set_pricing_settings(settings).await
     }
-}
-
-fn official_call(trace: CursorRunTraceSummary) -> CallSummary {
-    let model_id = trace.model_id.clone().unwrap_or_else(|| "Cursor".into());
-    let ttfb = trace
-        .first_response_at_ms
-        .map(|value| (value - trace.received_at_ms).max(0));
-    let duration = trace
-        .finished_at_ms
-        .map(|value| (value - trace.received_at_ms).max(0));
-    let error = trace.error_message.clone();
-    CallSummary {
-        call: LlmCallSummary {
-            call_id: format!("cursor:{}", trace.request_id),
-            run_id: trace.request_id.clone(),
-            conversation_id: trace
-                .conversation_id
-                .clone()
-                .unwrap_or_else(|| trace.request_id.clone()),
-            provider_call_index: 0,
-            model_hash: None,
-            provider_type: "cursor-official".into(),
-            provider_url: "https://api2.cursor.sh".into(),
-            request_type: "cursor-run-sse".into(),
-            request_url: "https://api2.cursor.sh/agent.v1.AgentService/RunSSE".into(),
-            model_id: model_id.clone(),
-            display_name: model_id,
-            reasoning_effort: None,
-            fast: None,
-            status: trace.status.clone(),
-            finish_reason: None,
-            created_at_ms: trace.received_at_ms,
-            request_started_at_ms: Some(trace.received_at_ms),
-            response_headers_at_ms: trace.first_response_at_ms,
-            first_event_at_ms: trace.first_response_at_ms,
-            first_text_at_ms: None,
-            first_valid_response_at_ms: None,
-            finished_at_ms: trace.finished_at_ms,
-            queue_ms: None,
-            ttfb_ms: ttfb,
-            ttft_ms: None,
-            ttfr_ms: None,
-            duration_ms: duration,
-            input_tokens: None,
-            output_tokens: None,
-            total_tokens: None,
-            cache_read_tokens: None,
-            cache_write_tokens: None,
-            reasoning_tokens: None,
-            usage: None,
-            message_count: 0,
-            tool_count: 0,
-            request_bytes: Some(trace.request_bytes),
-            response_bytes: trace.response_bytes,
-            stream_event_count: trace.response_event_count,
-            http_status: trace.http_status,
-            error_kind: error.as_ref().map(|_| "cursor_official".into()),
-            error_message: error,
-            detailed: true,
-        },
-        call_kind: "cursor_official",
-        route: "cursor_official",
-    }
-}
-
-fn cursor_artifact(artifact: CursorRunTraceArtifact) -> CursorTraceArtifactDetail {
-    let byte_count = artifact.data.len();
-    let (encoding, data) = match readable_utf8(&artifact.data) {
-        Some(value) => ("utf8", value.into()),
-        None => ("base64", STANDARD.encode(&artifact.data)),
-    };
-    CursorTraceArtifactDetail {
-        seq: artifact.seq,
-        artifact_type: artifact.artifact_type,
-        source: artifact.source,
-        metadata: artifact.metadata,
-        created_at_ms: artifact.created_at_ms,
-        byte_count,
-        encoding,
-        data,
-    }
-}
-
-fn readable_utf8(data: &[u8]) -> Option<&str> {
-    let value = std::str::from_utf8(data).ok()?;
-    value
-        .chars()
-        .all(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
-        .then_some(value)
 }
 
 async fn discover_models_from_endpoint(
@@ -784,11 +473,6 @@ async fn discover_models_from_endpoint(
         }
         ProviderType::Anthropic => {
             anthropic_models(client, base_url, api_key, custom_headers).await?
-        }
-        ProviderType::Plugin => {
-            return Err(Error::Config(
-                "plugin providers discover models through their plugin".into(),
-            ))
         }
     };
     models.sort();

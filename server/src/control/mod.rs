@@ -3,7 +3,6 @@ mod calls;
 mod harness;
 mod models;
 mod overview;
-mod plugins;
 mod service;
 mod settings;
 
@@ -22,7 +21,7 @@ use url::{Host, Url};
 
 pub use service::{
     CallDetail, CallSummary, ControlService, DiscoveredModels, LegacyModelImportPreview,
-    LegacyModelImportResult, ModelConnectivityResult, ModelDiscoveryInput, ObservabilitySettings,
+    LegacyModelImportResult, ModelConnectivityResult, ModelDiscoveryInput,
 };
 
 pub fn web_router(service: ControlService, assets: impl AsRef<std::path::Path>) -> Router {
@@ -131,57 +130,6 @@ pub fn api_router(service: ControlService) -> Router {
         )
         .route("/__byok-api__/api/llm-calls", get(calls::list))
         .route("/__byok-api__/api/llm-calls/{call_id}", get(calls::detail))
-        .route("/__byok-api__/api/plugins", get(plugins::list))
-        .route(
-            "/__byok-api__/api/plugins/runtime",
-            get(plugins::runtime_status)
-                .post(plugins::initialize_runtime)
-                .delete(plugins::cancel_runtime_initialization),
-        )
-        .route(
-            "/__byok-api__/api/plugins/oauth/{session_id}/poll",
-            post(plugins::oauth_poll),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}",
-            axum::routing::delete(plugins::remove),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/resources/{resource_type}/add/{method_id}/begin",
-            post(plugins::oauth_begin),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/resources/{resource_type}/import",
-            post(plugins::import),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/resources/{resource_type}/export",
-            get(plugins::export_resources),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/resources/{resource_type}/{resource_id}",
-            axum::routing::delete(plugins::delete_resource),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/resources/{resource_type}/{resource_id}/actions/{action_id}",
-            post(plugins::action),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/resources/{resource_type}/{resource_id}/refresh",
-            post(plugins::refresh_resource),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/providers/{provider_id}/models/sync",
-            post(plugins::sync_models),
-        )
-        .route(
-            "/__byok-api__/api/plugins/{plugin_id}/providers/{provider_id}/models/enabled",
-            put(plugins::set_model_enabled),
-        )
-        .route(
-            "/__byok-api__/api/settings/observability",
-            get(settings::get).put(settings::update),
-        )
         .route(
             "/__byok-api__/api/settings/ports",
             get(settings::get_ports).put(settings::update_ports),
@@ -197,10 +145,6 @@ pub fn api_router(service: ControlService) -> Router {
         .route(
             "/__byok-api__/api/settings/desktop",
             get(settings::get_desktop).put(settings::update_desktop),
-        )
-        .route(
-            "/__byok-api__/api/settings/commit",
-            get(settings::get_commit).put(settings::update_commit),
         )
         .route(
             "/__byok-api__/api/settings/pricing",

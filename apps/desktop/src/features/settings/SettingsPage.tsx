@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
-import { api, type ProxySettings, type ProxySettingsInput, type StatisticsStorage, type StatisticsStorageScope } from "../../shared/api";
+import { api, type ProxySettings, type ProxySettingsInput, type StatisticsStorage } from "../../shared/api";
 import { PageContent } from "../../shell/layout/PageContent";
 import { LegacyModelImport } from "../models/LegacyModelImport";
 import { AppLifecycleSettingsCard } from "./AppLifecycleSettingsCard";
-import { CommitSettingsCard } from "./CommitSettingsCard";
 import { PricingSettingsCard } from "./PricingSettingsCard";
 import { ProxySettingsCard } from "./ProxySettingsCard";
 import { Button } from "../../shared/ui/Button";
-import { Checkbox } from "../../shared/ui/Checkbox";
 import { ConfirmDialog } from "../../shared/ui/ConfirmDialog";
 import { FormField, TextInput } from "../../shared/ui/FormControls";
 import { Select } from "../../shared/ui/Select";
@@ -19,7 +17,7 @@ import { themeOptions } from "../../shared/theme/theme";
 import styles from "./SettingsPage.module.scss";
 
 export function SettingsPage() {
-  const { detailed, ports, theme } = useAppStore();
+  const { ports, theme } = useAppStore();
   const { preference, locale } = useI18n();
   const message = useMessage();
   const [proxyPort, setProxyPort] = useState(String(ports.proxy_port));
@@ -28,7 +26,6 @@ export function SettingsPage() {
   const [savingPorts, setSavingPorts] = useState(false);
   const [storage, setStorage] = useState<StatisticsStorage | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [clearScope, setClearScope] = useState<StatisticsStorageScope>("details");
   const [clearing, setClearing] = useState(false);
   const [outboundProxy, setOutboundProxy] = useState<ProxySettings | null>(null);
   const [proxyDraft, setProxyDraft] = useState<ProxySettingsInput>({ mode: "default", address: "", auth_enabled: false, username: "", password: "" });
@@ -84,10 +81,10 @@ export function SettingsPage() {
   const clearStorage = async () => {
     try {
       setClearing(true);
-      setStorage(await api.clearStatisticsStorage(clearScope));
+      setStorage(await api.clearStatisticsStorage());
       setConfirmClear(false);
       await appStore.refresh();
-      message(clearScope === "all" ? t("全部统计数据已清理") : t("详细记录已清理"));
+      message(t("调用统计已清理"));
     } catch (cause) {
       message(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -119,27 +116,10 @@ export function SettingsPage() {
       setSavingProxy(false);
     }
   };
-  const clearTitle = clearScope === "all" ? t("确定要清理全部统计数据吗？") : t("确定要清理详细记录吗？");
-  const clearDescription = clearScope === "all"
-    ? t("所有调用汇总、详细内容和追踪记录都会被删除。模型配置、CA 和应用设置不会受到影响，此操作无法撤销。")
-    : t("仅删除请求、响应和追踪附件等详细内容，保留调用汇总、统计指标和配置。");
+  const clearTitle = t("确定要清理统计数据吗？");
+  const clearDescription = t("所有调用汇总都会被删除。模型配置、CA 和应用设置不会受到影响，此操作无法撤销。");
   const content = (
     <div className={styles.page}>
-      <TitledCard title={t("调用观测")}>
-        <div className={styles.settingRow}>
-          <div>
-            <strong>{t("详细模式")}</strong>
-            <small>
-              {t("额外保存完整请求和流响应；默认只保存时间、状态与用量。")}
-            </small>
-          </div>
-          <Checkbox
-            label={t("详细模式")}
-            checked={detailed}
-            onChange={(checked) => void appStore.updateDetailed(checked)}
-          />
-        </div>
-      </TitledCard>
       <TitledCard title={t("端口设置")} action={editingPorts ? (
         <div className={styles.cardActions}>
           <Button size="small" disabled={savingPorts} onClick={cancelPortEdit}>{t("取消")}</Button>
@@ -192,7 +172,6 @@ export function SettingsPage() {
         </div>
       </TitledCard>
       <ProxySettingsCard settings={outboundProxy} draft={proxyDraft} editing={editingProxy} saving={savingProxy} onDraftChange={setProxyDraft} onEdit={editProxy} onCancel={cancelProxyEdit} onSave={() => void saveProxy()} />
-      <CommitSettingsCard />
       <PricingSettingsCard />
       <AppLifecycleSettingsCard />
       <LegacyModelImport>{({ busy, previewing, open }) => <TitledCard title={t("导入")}>
@@ -244,12 +223,12 @@ export function SettingsPage() {
         <div className={styles.storageRow}>
           <div>
             <strong>{t("统计数据")}</strong>
-            <small>{storage ? t("调用记录 {calls} 条 · 追踪记录 {traces} 条", { calls: storage.call_count, traces: storage.trace_count }) : t("计算中…")}</small>
+            <small>{storage ? t("调用记录 {calls} 条", { calls: storage.call_count }) : t("计算中…")}</small>
           </div>
           <button
             type="button"
             className={styles.textButton}
-            onClick={() => { setClearScope("details"); setConfirmClear(true); }}
+            onClick={() => setConfirmClear(true)}
           >
             {t("清理存储空间")}
           </button>
@@ -265,15 +244,6 @@ export function SettingsPage() {
         onConfirm={() => void clearStorage()}
       >
         <div className={styles.confirmContent}>
-          <Select
-            value={clearScope}
-            ariaLabel={t("清理范围")}
-            options={[
-              { value: "details", label: t("仅清理详细记录") },
-              { value: "all", label: t("清理全部统计数据") },
-            ]}
-            onChange={(value) => setClearScope(value as StatisticsStorageScope)}
-          />
           <small>{clearDescription}</small>
         </div>
       </ConfirmDialog>

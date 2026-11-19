@@ -1,8 +1,6 @@
 //! Coordinates construction of a complete Cursor checkpoint.
 use std::collections::HashSet;
 
-use prost::Message;
-
 use crate::{
     cursor::{
         checkpoint::{messages, PendingSteps},
@@ -271,26 +269,12 @@ impl CheckpointBuilder {
             pending_assistants = checkpoint.pending_tool_calls.len(),
             "publishing Cursor checkpoint"
         );
-        let result = handle.emit(&pb::AgentServerMessage {
+        handle.emit(&pb::AgentServerMessage {
             ttft_breakdown: None,
             message: Some(
                 pb::agent_server_message::Message::ConversationCheckpointUpdate(checkpoint.clone()),
             ),
-        });
-        if let Some(trace) = handle.trace() {
-            trace.artifact(
-                "checkpoint",
-                "byok_server",
-                &checkpoint.encode_to_vec(),
-                serde_json::json!({
-                    "root_message_count": checkpoint.root_prompt_messages_json.len(),
-                    "turn_count": checkpoint.turns.len(),
-                    "pending_tool_call_count": checkpoint.pending_tool_calls.len(),
-                    "emit_status": if result.is_ok() { "sent" } else { "error" },
-                }),
-            );
-        }
-        result
+        })
     }
 }
 

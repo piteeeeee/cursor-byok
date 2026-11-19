@@ -16,9 +16,8 @@ use crate::{
 use super::{
     apply_body_allowlist, apply_openai_prompt_cache_key,
     attempt::{send_once, Attempt},
-    map_sse_error, merge_extra_params, provider_event_error,
-    recorder::recorded_headers,
-    CallRecorder, FinishReason, ModelEvent, Provider, ProviderStream,
+    map_sse_error, merge_extra_params, provider_event_error, CallRecorder, FinishReason,
+    ModelEvent, Provider, ProviderStream,
 };
 
 #[derive(Default)]
@@ -85,9 +84,8 @@ impl Provider for OpenAiResponsesProvider {
             merge_extra_params(&mut body, &request.model.extra_params)?;
             apply_openai_prompt_cache_key(&mut body, &request.model.model_id)?;
             apply_body_allowlist(&mut body, config.allowed_body_fields.as_ref())?;
-            let request_headers = recorded_headers(&config, &[("content-type", "application/json")]);
             if let Some(recorder) = &recorder {
-                recorder.request(request_headers.clone(), &body).await?;
+                recorder.request(&body).await?;
             }
             let attempt = send_once(
                 "OpenAI Responses",

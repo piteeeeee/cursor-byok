@@ -3,11 +3,9 @@
 pub mod account;
 pub mod analytics;
 pub mod blob_sync;
-pub mod commit_message;
 pub mod compatibility;
 pub mod context_sync;
 pub(crate) mod entitlement;
 pub mod model_catalog;
-pub mod observability;
 pub mod server_config;
 pub mod usage;

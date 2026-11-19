@@ -1,8 +1,8 @@
-//! Persists provider call payloads, timing, and usage.
+//! Persists provider call timing and usage.
 use sqlx::Row;
 
 use crate::{
-    model::{LlmCallRequest, LlmCallResponseChunk, LlmCallSummary, NewLlmCall, Usage},
+    model::{LlmCallSummary, NewLlmCall, Usage},
     Result,
 };
 
@@ -14,56 +14,7 @@ pub(crate) struct ContextUsageAnchor {
     pub(crate) message_count: usize,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct BufferedLlmChunk {
-    pub(crate) seq: i64,
-    pub(crate) elapsed_ms: i64,
-    pub(crate) data: Option<Vec<u8>>,
-    pub(crate) byte_count: usize,
-}
-
-impl BufferedLlmChunk {
-    pub(crate) fn new(seq: i64, elapsed_ms: i64, data: &[u8]) -> Self {
-        Self {
-            seq,
-            elapsed_ms,
-            data: Some(data.to_vec()),
-            byte_count: data.len(),
-        }
-    }
-
-    pub(crate) fn metrics(seq: i64, elapsed_ms: i64, byte_count: usize) -> Self {
-        Self {
-            seq,
-            elapsed_ms,
-            data: None,
-            byte_count,
-        }
-    }
-}
-
 impl Store {
-    pub async fn detailed_logging(&self) -> Result<bool> {
-        let value: String = sqlx::query_scalar(
-            "SELECT value_json FROM service_settings WHERE setting_key = 'llm_detailed_logging'",
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(serde_json::from_str(&value)?)
-    }
-
-    pub async fn set_detailed_logging(&self, enabled: bool) -> Result<()> {
-        let _write = self.writes.lock().await;
-        sqlx::query(
-            "INSERT INTO service_settings(setting_key, value_json, updated_at_ms) VALUES ('llm_detailed_logging', ?, ?) ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms = excluded.updated_at_ms",
-        )
-        .bind(serde_json::to_string(&enabled)?)
-        .bind(now_ms())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     pub async fn start_llm_call(&self, call: &NewLlmCall) -> Result<()> {
         let _write = self.writes.lock().await;
         let now = now_ms();
@@ -73,7 +24,7 @@ impl Store {
                 provider_type, provider_url, request_type, request_url, model_id, display_name,
                 reasoning_effort, fast, status,
                 created_at_ms, request_started_at_ms, queue_ms, message_count, tool_count, detailed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, 0, ?, ?, ?)"#,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, 0, ?, ?, 0)"#,
         )
         .bind(&call.call_id)
         .bind(&call.run_id)
@@ -92,41 +43,19 @@ impl Store {
         .bind(now)
         .bind(call.message_count as i64)
         .bind(call.tool_count as i64)
-        .bind(call.detailed)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    pub async fn record_llm_request(
-        &self,
-        call_id: &str,
-        headers: &serde_json::Value,
-        body: &serde_json::Value,
-        detailed: bool,
-    ) -> Result<()> {
+    pub async fn record_llm_request(&self, call_id: &str, body: &serde_json::Value) -> Result<()> {
         let body_json = serde_json::to_string(body)?;
-        let headers_json = detailed
-            .then(|| serde_json::to_string(headers))
-            .transpose()?;
         let _write = self.writes.lock().await;
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        if detailed {
-            sqlx::query("INSERT INTO llm_call_requests(call_id, headers_json, body_json, byte_count) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM llm_calls WHERE call_id = ?)")
-                .bind(call_id)
-                .bind(headers_json)
-                .bind(&body_json)
-                .bind(body_json.len() as i64)
-                .bind(call_id)
-                .execute(&mut *transaction)
-                .await?;
-        }
         sqlx::query("UPDATE llm_calls SET request_bytes = ? WHERE call_id = ?")
             .bind(body_json.len() as i64)
             .bind(call_id)
-            .execute(&mut *transaction)
+            .execute(&self.pool)
             .await?;
-        transaction.commit().await?;
         Ok(())
     }
 
@@ -147,62 +76,23 @@ impl Store {
         Ok(())
     }
 
-    pub async fn record_llm_chunk(
+    pub(crate) async fn record_llm_stream_totals(
         &self,
         call_id: &str,
-        seq: i64,
-        elapsed_ms: i64,
-        data: &[u8],
-        detailed: bool,
+        byte_count: i64,
+        event_count: i64,
     ) -> Result<()> {
-        let chunk = if detailed {
-            BufferedLlmChunk::new(seq, elapsed_ms, data)
-        } else {
-            BufferedLlmChunk::metrics(seq, elapsed_ms, data.len())
-        };
-        self.record_llm_chunks(call_id, &[chunk], detailed).await
-    }
-
-    pub(crate) async fn record_llm_chunks(
-        &self,
-        call_id: &str,
-        chunks: &[BufferedLlmChunk],
-        detailed: bool,
-    ) -> Result<()> {
-        if chunks.is_empty() {
+        if event_count == 0 {
             return Ok(());
         }
-        let byte_count = chunks
-            .iter()
-            .map(|chunk| chunk.byte_count as i64)
-            .sum::<i64>();
-        let event_count = chunks.len() as i64;
         let _write = self.writes.lock().await;
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        if detailed {
-            for chunk in chunks {
-                let data = chunk.data.as_deref().ok_or_else(|| {
-                    crate::Error::Store("detailed LLM chunk is missing payload data".into())
-                })?;
-                sqlx::query("INSERT INTO llm_call_response_chunks(call_id, seq, received_offset_ms, data, byte_count) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM llm_calls WHERE call_id = ?)")
-                    .bind(call_id)
-                    .bind(chunk.seq)
-                    .bind(chunk.elapsed_ms)
-                    .bind(data)
-                    .bind(chunk.byte_count as i64)
-                    .bind(call_id)
-                    .execute(&mut *transaction)
-                    .await?;
-            }
-        }
         sqlx::query("UPDATE llm_calls SET first_event_at_ms = COALESCE(first_event_at_ms, ?), response_bytes = response_bytes + ?, stream_event_count = stream_event_count + ? WHERE call_id = ?")
             .bind(now_ms())
             .bind(byte_count)
             .bind(event_count)
             .bind(call_id)
-            .execute(&mut *transaction)
+            .execute(&self.pool)
             .await?;
-        transaction.commit().await?;
         Ok(())
     }
 
@@ -319,40 +209,6 @@ impl Store {
             .map(summary_from_row)
             .transpose()
     }
-
-    pub async fn llm_call_request(&self, call_id: &str) -> Result<Option<LlmCallRequest>> {
-        let row = sqlx::query(
-            "SELECT headers_json, body_json, byte_count FROM llm_call_requests WHERE call_id = ?",
-        )
-        .bind(call_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        row.map(|row| {
-            Ok(LlmCallRequest {
-                headers: serde_json::from_str(row.try_get("headers_json")?)?,
-                body: serde_json::from_str(row.try_get("body_json")?)?,
-                byte_count: row.try_get("byte_count")?,
-            })
-        })
-        .transpose()
-    }
-
-    pub async fn llm_call_chunks(&self, call_id: &str) -> Result<Vec<LlmCallResponseChunk>> {
-        let rows = sqlx::query("SELECT seq, received_offset_ms, data, byte_count FROM llm_call_response_chunks WHERE call_id = ? ORDER BY seq")
-            .bind(call_id)
-            .fetch_all(&self.pool)
-            .await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(LlmCallResponseChunk {
-                    seq: row.try_get("seq")?,
-                    received_offset_ms: row.try_get("received_offset_ms")?,
-                    data: String::from_utf8_lossy(&row.try_get::<Vec<u8>, _>("data")?).into_owned(),
-                    byte_count: row.try_get("byte_count")?,
-                })
-            })
-            .collect()
-    }
 }
 
 fn as_i64(value: Option<u64>) -> Option<i64> {
@@ -406,7 +262,6 @@ fn summary_from_row(row: sqlx::sqlite::SqliteRow) -> Result<LlmCallSummary> {
         http_status: row.try_get("http_status")?,
         error_kind: row.try_get("error_kind")?,
         error_message: row.try_get("error_message")?,
-        detailed: row.try_get("detailed")?,
     })
 }
 
@@ -415,9 +270,9 @@ mod tests {
     use super::*;
     use crate::model::ProviderType;
 
-    /// 插件模型不在 model_configs 中,调用记录必须照常落库并可按其稳定 ID 筛选。
+    /// 调用记录不依赖 model_configs 中的行,按稳定模型 ID 汇总。
     #[tokio::test]
-    async fn plugin_calls_record_without_a_model_config_row() {
+    async fn calls_record_without_a_model_config_row() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::connect(&format!(
             "sqlite://{}",
@@ -425,34 +280,33 @@ mod tests {
         ))
         .await
         .unwrap();
-        let plugin_model = "plugin:dev.example/codex/gpt-test";
+        let model_hash = "detached-model-hash";
         store
             .start_llm_call(&NewLlmCall {
-                call_id: "plugin-call".into(),
+                call_id: "detached-call".into(),
                 run_id: "run".into(),
                 conversation_id: "conversation".into(),
                 provider_call_index: 0,
-                model_hash: plugin_model.into(),
-                provider_type: ProviderType::Plugin,
-                provider_url: "plugin://dev.example/codex".into(),
-                request_type: ProviderType::Plugin,
-                request_url: "plugin://dev.example/codex".into(),
+                model_hash: model_hash.into(),
+                provider_type: ProviderType::OpenAiChat,
+                provider_url: "https://provider.example".into(),
+                request_type: ProviderType::OpenAiChat,
+                request_url: "https://provider.example/v1/chat/completions".into(),
                 model_id: "gpt-test".into(),
                 display_name: "GPT Test".into(),
                 reasoning_effort: None,
                 fast: false,
                 message_count: 1,
                 tool_count: 0,
-                detailed: false,
             })
             .await
             .unwrap();
         store
-            .finish_llm_call("plugin-call", "completed", None, 10, None, None)
+            .finish_llm_call("detached-call", "completed", None, 10, None, None)
             .await
             .unwrap();
         let overview = store
-            .overview(None, None, Some(&format!("[\"{plugin_model}\"]")), None)
+            .overview(None, None, Some(&format!("[\"{model_hash}\"]")), None)
             .await
             .unwrap();
         assert_eq!(overview.metrics.llm_calls, 1);
@@ -481,17 +335,16 @@ mod tests {
                     conversation_id: "conversation".into(),
                     provider_call_index: 0,
                     model_hash: model_id.into(),
-                    provider_type: ProviderType::Plugin,
-                    provider_url: "plugin://test".into(),
-                    request_type: ProviderType::Plugin,
-                    request_url: "plugin://test".into(),
+                    provider_type: ProviderType::OpenAiChat,
+                    provider_url: "https://provider.example".into(),
+                    request_type: ProviderType::OpenAiChat,
+                    request_url: "https://provider.example/v1/chat/completions".into(),
                     model_id: model_id.into(),
                     display_name: model_id.into(),
                     reasoning_effort: None,
                     fast: false,
                     message_count,
                     tool_count: 0,
-                    detailed: false,
                 })
                 .await
                 .unwrap();

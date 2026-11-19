@@ -12,7 +12,6 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::{
     cursor::protocol::proto::agent::v1 as pb,
-    cursor::services::observability::CursorTraceRecorder,
     cursor::transport::TransportHandle,
     store::{BlobEdge, BlobId, Store},
     Error, Result,
@@ -68,30 +67,9 @@ impl BlobSynchronizer {
         &self.inner.request_id
     }
 
-    pub(crate) fn trace(&self) -> Option<&CursorTraceRecorder> {
-        self.inner.handle.trace()
-    }
-
     pub async fn persist(&self, data: &[u8], edges: &[BlobEdge]) -> Result<BlobId> {
         let id = self.inner.store.put_blob(data, edges).await?;
-        let result = self.ensure_set(&id, data).await;
-        if let Some(trace) = self.inner.handle.trace() {
-            trace.linked_blob(
-                "blob_set",
-                "byok_server",
-                &id,
-                serde_json::json!({
-                    "byte_count": data.len(),
-                    "status": if result.is_ok() { "acknowledged" } else { "error" },
-                    "error": result.as_ref().err().map(ToString::to_string),
-                    "edges": edges.iter().map(|edge| serde_json::json!({
-                        "child_blob_id": edge.child.to_base64(),
-                        "field_name": edge.field_name,
-                    })).collect::<Vec<_>>(),
-                }),
-            );
-        }
-        result?;
+        self.ensure_set(&id, data).await?;
         Ok(id)
     }
 
@@ -141,18 +119,6 @@ impl BlobSynchronizer {
 
     pub async fn get(&self, blob_id: &BlobId) -> Result<Option<Vec<u8>>> {
         if let Some(data) = self.inner.store.get_blob(blob_id).await? {
-            if let Some(trace) = self.inner.handle.trace() {
-                trace.linked_blob(
-                    "blob_get",
-                    "byok_server",
-                    blob_id,
-                    serde_json::json!({
-                        "byte_count": data.len(),
-                        "source": "local_store",
-                        "status": "found",
-                    }),
-                );
-            }
             return Ok(Some(data));
         }
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
@@ -186,45 +152,6 @@ impl BlobSynchronizer {
         };
         if result.is_err() {
             self.inner.get_requests.lock().await.remove(&id);
-        }
-        if let Some(trace) = self.inner.handle.trace() {
-            match &result {
-                Ok(Some(data)) => {
-                    trace.linked_blob(
-                        "blob_get",
-                        "cursor_client",
-                        blob_id,
-                        serde_json::json!({
-                            "byte_count": data.len(),
-                            "source": "cursor_client",
-                            "status": "found",
-                        }),
-                    );
-                }
-                Ok(None) => {
-                    trace.artifact(
-                        "blob_get",
-                        "cursor_client",
-                        &[],
-                        serde_json::json!({
-                            "blob_id": blob_id.to_base64(),
-                            "status": "missing",
-                        }),
-                    );
-                }
-                Err(error) => {
-                    trace.artifact(
-                        "blob_get",
-                        "cursor_client",
-                        &[],
-                        serde_json::json!({
-                            "blob_id": blob_id.to_base64(),
-                            "status": "error",
-                            "error": error.to_string(),
-                        }),
-                    );
-                }
-            }
         }
         result
     }

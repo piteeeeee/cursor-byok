@@ -10,7 +10,6 @@ use crate::{
     cursor::{
         conversation::TransportCommand,
         protocol::{connect, proto::agent::v1 as pb},
-        services::observability::CursorTraceRecorder,
     },
     Error, Result,
 };
@@ -30,7 +29,6 @@ pub struct TransportHandle {
     output: Arc<OutputHub>,
     conversation_id: Arc<OnceLock<String>>,
     parent: Arc<OnceLock<TransportParent>>,
-    trace: CursorTraceRecorder,
     lifecycle: TransportLifecycle,
     disconnect: CancellationToken,
 }
@@ -40,7 +38,6 @@ impl TransportHandle {
         request_id: String,
         commands: mpsc::Sender<TransportCommand>,
         output: Arc<OutputHub>,
-        trace: CursorTraceRecorder,
     ) -> Self {
         Self {
             request_id,
@@ -48,7 +45,6 @@ impl TransportHandle {
             output,
             conversation_id: Arc::new(OnceLock::new()),
             parent: Arc::new(OnceLock::new()),
-            trace,
             lifecycle: TransportLifecycle::new(),
             disconnect: CancellationToken::new(),
         }
@@ -127,10 +123,6 @@ impl TransportHandle {
 
     pub(crate) fn close_output(&self) -> bool {
         self.output.close()
-    }
-
-    pub(crate) fn trace(&self) -> Option<&CursorTraceRecorder> {
-        Some(&self.trace)
     }
 
     pub(crate) fn accepting_appends(&self) -> bool {
