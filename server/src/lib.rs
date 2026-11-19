@@ -13,6 +13,7 @@ pub mod provider;
 pub mod run;
 pub mod search;
 pub mod store;
+pub(crate) mod timing;
 
 pub use app::App;
 pub use config::Config;

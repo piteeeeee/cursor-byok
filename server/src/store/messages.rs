@@ -78,6 +78,12 @@ impl Store {
         tx: &mut Transaction<'_, Sqlite>,
         checkpoint_id: i64,
     ) -> Result<Vec<CanonicalMessage>> {
+        // CROSS JOIN pins the join order: the lineage CTE drives the scan, so
+        // SQLite seeks `checkpoint_messages` by its (checkpoint_id, ordinal)
+        // primary key instead of scanning the entire table and filtering by a
+        // bloom filter built from the recursive result. On a production-size
+        // database that full scan reads every message reference every time a
+        // Run loads its history.
         let rows = sqlx::query(
             "WITH RECURSIVE lineage(checkpoint_id, parent_checkpoint_id, depth) AS (
                  SELECT checkpoint_id, parent_checkpoint_id, 0
@@ -89,8 +95,9 @@ impl Store {
              )
              SELECT m.payload_json
              FROM lineage
-             JOIN checkpoint_messages rm ON rm.checkpoint_id = lineage.checkpoint_id
-             JOIN messages m
+             CROSS JOIN checkpoint_messages rm
+               ON rm.checkpoint_id = lineage.checkpoint_id
+             CROSS JOIN messages m
                ON m.conversation_id = rm.conversation_id AND m.message_id = rm.message_id
              ORDER BY lineage.depth DESC, rm.ordinal ASC",
         )

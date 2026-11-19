@@ -65,9 +65,11 @@ pub(crate) async fn prepare(
         blob_sync,
         context_sync,
     } = dependencies;
+    let mut stages = crate::timing::Stages::new("prepare");
     checkpoint
         .import_prefetched(&request.pre_fetched_blobs)
         .await?;
+    stages.mark("prefetched blobs");
     let conversation_id = ConversationId::new(
         request
             .conversation_id
@@ -84,6 +86,7 @@ pub(crate) async fn prepare(
     } else {
         None
     };
+    stages.mark("hydrate conversation state");
     if let Some(trace) = blob_sync.trace() {
         let hydrated_messages = base_messages.as_deref().unwrap_or_default();
         let hydrated_images = hydrated_messages
@@ -118,6 +121,7 @@ pub(crate) async fn prepare(
         trace.artifact("history_projection", "byok_server", &encoded, summary);
     }
     let request_context = context::hydrate(request, context_sync).await?;
+    stages.mark("request context");
     let ActionProjection {
         mode: mode_number,
         mut turn_user,
@@ -137,6 +141,7 @@ pub(crate) async fn prepare(
     if let Some(configured_model) = store.model(&model.model_id).await? {
         configured_model.configure(&mut model);
     }
+    stages.mark("model configuration");
     let dynamic = context::dynamic_mcp(request, &request_context)?;
     let subagent_model_overrides = model::overrides(request)?;
     let subagents_disabled = subagent_model_overrides
@@ -161,6 +166,7 @@ pub(crate) async fn prepare(
     } else {
         checkpoint_prompt.clone()
     };
+    stages.mark("prompt assembly");
     let proposed_base_checkpoint_id = match base_messages.as_mut() {
         Some(messages) if !messages.is_empty() => {
             validate_prompt_root(messages)?;
@@ -171,6 +177,7 @@ pub(crate) async fn prepare(
         }
         Some(_) | None => store.ensure_conversation(&conversation_id).await?,
     };
+    stages.mark("base checkpoint import");
     let base_checkpoint_id = match input_id.as_deref() {
         Some(input_id) => {
             store
@@ -179,6 +186,7 @@ pub(crate) async fn prepare(
         }
         None => proposed_base_checkpoint_id,
     };
+    stages.mark("input anchor");
     let mut projected_user_context = if input_id.is_some() && !compacting && !background_completion
     {
         break_messages::compile_request_context(
@@ -208,6 +216,7 @@ pub(crate) async fn prepare(
             );
         }
     }
+    stages.mark("user event id");
     let existing_runtime = match event_id.as_deref() {
         Some(event_id) => {
             store
@@ -216,6 +225,7 @@ pub(crate) async fn prepare(
         }
         _ => None,
     };
+    stages.mark("existing runtime message");
     let request_context_message = match event_id.as_deref() {
         Some(event_id) if !compacting && !background_completion => {
             let message_id = format!("request-context:{event_id}");
@@ -234,6 +244,7 @@ pub(crate) async fn prepare(
         }
         _ => None,
     };
+    stages.mark("request context message");
     let mut initial_messages = if compacting {
         Vec::new()
     } else {
@@ -288,10 +299,12 @@ pub(crate) async fn prepare(
             }
         }
     };
+    stages.mark("initial messages");
     let (base_checkpoint_id, reused) = store
         .match_checkpoint_prefix(&conversation_id, base_checkpoint_id, &initial_messages)
         .await?;
     initial_messages.drain(..reused);
+    stages.mark("checkpoint prefix match");
     let action = if compacting {
         RunAction::Compact
     } else if starts_turn {
@@ -322,6 +335,7 @@ pub(crate) async fn prepare(
         subagents_disabled,
         &subagent_model_overrides,
     );
+    stages.finish("prepare complete");
     Ok((
         PreparedRun {
             run_id,

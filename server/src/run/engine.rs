@@ -46,6 +46,7 @@ impl RunEngine {
         mut client: RunPort,
         cancellation: CancellationToken,
     ) -> RunOutcome {
+        let mut stages = crate::timing::Stages::new("run");
         let claimed = match self.store.claim_run(&prepared).await {
             Ok(claimed) => claimed,
             Err(error) => {
@@ -56,12 +57,14 @@ impl RunEngine {
                 return outcome;
             }
         };
+        stages.mark("claim ownership");
         let outcome = self
             .run_claimed(
                 &prepared,
                 claimed.head_checkpoint_id,
                 &mut client,
                 &cancellation,
+                &mut stages,
             )
             .await;
         let usage = outcome.1;
@@ -96,6 +99,7 @@ impl RunEngine {
         mut checkpoint: crate::model::CheckpointId,
         client: &mut RunPort,
         cancellation: &CancellationToken,
+        stages: &mut crate::timing::Stages,
     ) -> (RunOutcome, Option<Usage>) {
         let mut usage = None;
         let mut context_usage_anchor = match self
@@ -106,6 +110,7 @@ impl RunEngine {
             Ok(anchor) => anchor,
             Err(error) => return (RunOutcome::Failed(error.into()), usage),
         };
+        stages.mark("usage anchor");
         tracing::info!(
             checkpoint_id = checkpoint.0,
             "Run claimed conversation ownership"
@@ -130,6 +135,7 @@ impl RunEngine {
                     Err(error) => return (RunOutcome::Failed(error.into()), usage),
                 }
             }
+            stages.mark("append initial messages");
             if changed {
                 let (barrier, ready) = CommitBarrier::before_continue();
                 if emit(
@@ -149,6 +155,7 @@ impl RunEngine {
                 if let Err(outcome) = wait_for_state_ready(ready, cancellation).await {
                     return (outcome, usage);
                 }
+                stages.mark("initial checkpoint published");
             }
         }
 
@@ -189,10 +196,12 @@ impl RunEngine {
                 Ok(messages) => messages,
                 Err(error) => return (RunOutcome::Failed(error.into()), usage),
             };
+            stages.mark("load checkpoint messages");
             let history = match crate::model::project_messages(&messages) {
                 Ok(history) => history,
                 Err(error) => return (RunOutcome::Failed(error.into()), usage),
             };
+            stages.mark("project messages");
             let compaction_estimate = (prepared.action != RunAction::Compact)
                 .then(|| {
                     super::compaction::compaction_estimate(prepared, &history, context_usage_anchor)
@@ -223,10 +232,12 @@ impl RunEngine {
                     Err(outcome) => return (outcome, usage),
                 }
             }
+            stages.mark("compaction estimate");
             let provider_call_index = match self.store.begin_provider_call(&prepared.run_id).await {
                 Ok(index) => index,
                 Err(error) => return (RunOutcome::Failed(error.into()), usage),
             };
+            stages.mark("begin provider call");
             tracing::debug!(
                 provider_call_index,
                 checkpoint_id = checkpoint.0,
@@ -236,6 +247,7 @@ impl RunEngine {
             if let Err(error) = hydrate_tool_images(&self.store, &mut history).await {
                 return (RunOutcome::Failed(error.into()), usage);
             }
+            stages.mark("hydrate tool images");
             // The usage anchor counts persisted messages only; a transient
             // tail is provider-visible but never committed.
             let anchored_messages = history.len();
@@ -270,6 +282,7 @@ impl RunEngine {
                 };
                 let cycle_cancellation = cancellation.child_token();
                 let cycle_events = client.events.clone();
+                stages.finish("first provider request");
                 let cycle = consume_model_cycle(
                     self.provider.stream(invocation, cycle_cancellation.clone()),
                     &cycle_events,
