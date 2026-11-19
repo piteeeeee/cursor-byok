@@ -195,50 +195,22 @@ async fn a_replaced_run_cannot_overwrite_its_cancelled_status() {
     let second = prepared("second");
 
     store.claim_run(&first).await.unwrap();
-    sqlx::query(
-        "INSERT INTO llm_calls(
-            call_id, run_id, conversation_id, provider_call_index,
-            provider_type, provider_url, request_type, request_url,
-            model_id, display_name, status,
-            created_at_ms, message_count, tool_count, detailed
-         ) VALUES (
-            'first:0', 'first', 'conversation', 0,
-            'openai-chat', 'https://example.com/v1',
-            'openai-chat', 'https://example.com/v1/chat/completions',
-            'model', 'Model', 'running',
-            unixepoch('subsec') * 1000, 1, 0, 0
-         )",
-    )
-    .execute(store.pool())
-    .await
-    .unwrap();
     store.claim_run(&second).await.unwrap();
     assert!(!store
         .finish_run(&first.run_id, RunStatus::Completed, None, None,)
         .await
         .unwrap());
 
-    let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE run_id = 'first'")
-        .fetch_one(store.pool())
-        .await
-        .unwrap();
-    let active: Option<String> = sqlx::query_scalar(
-        "SELECT active_run_id FROM conversations WHERE conversation_id = 'conversation'",
-    )
-    .fetch_one(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(status, "cancelled");
-    assert_eq!(active.as_deref(), Some("second"));
-    let call: (String, Option<i64>, Option<i64>) = sqlx::query_as(
-        "SELECT status, finished_at_ms, duration_ms FROM llm_calls WHERE call_id = 'first:0'",
-    )
-    .fetch_one(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(call.0, "cancelled");
-    assert!(call.1.is_some());
-    assert!(call.2.is_some());
+    assert_eq!(
+        store
+            .conversation(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .active_run_id,
+        Some(second.run_id)
+    );
+    assert!(store.begin_provider_call(&first.run_id).await.is_err());
 }
 
 #[tokio::test]

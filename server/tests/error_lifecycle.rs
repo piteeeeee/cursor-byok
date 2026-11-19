@@ -431,14 +431,11 @@ async fn unknown_tool_response_id_is_ignored_and_the_run_continues() {
         None
     );
 
-    let (status, failure_summary): (String, Option<String>) =
-        sqlx::query_as("SELECT status, failure_summary FROM runs WHERE cursor_request_id = ?")
-            .bind("protocol-failed-request")
-            .fetch_one(store.pool())
-            .await
-            .unwrap();
-    assert_eq!(status, "completed");
-    assert_eq!(failure_summary, None);
+    assert!(store
+        .active_run_for_cursor_request("protocol-failed-request")
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -591,14 +588,11 @@ async fn newer_run_request_on_one_bidi_stream_replaces_the_active_run() {
     let replacement_history = serde_json::to_string(&provider.requests()[1].history).unwrap();
     assert!(replacement_history.contains("use the cropped history"));
     assert!(!replacement_history.contains("read it"));
-    let statuses: Vec<String> = sqlx::query_scalar(
-        "SELECT status FROM runs WHERE cursor_request_id = ? ORDER BY created_at_ms, run_id",
-    )
-    .bind("protocol-failed-request")
-    .fetch_all(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(statuses, ["cancelled", "completed"]);
+    assert!(store
+        .active_run_for_cursor_request("protocol-failed-request")
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -697,14 +691,11 @@ async fn assert_run_starts_without_parent_dependency(
 
     assert!(terminal_json.get("error").is_none(), "{terminal_json}");
     assert_eq!(provider.requests().len(), 1);
-    let row: (String, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT run_kind, parent_run_id, parent_tool_call_id FROM runs WHERE cursor_request_id = ?",
-    )
-    .bind(request_id)
-    .fetch_one(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(row, ("root".into(), None, None));
+    assert!(store
+        .active_run_for_cursor_request(request_id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 fn client_run() -> pb::AgentClientMessage {

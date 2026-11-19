@@ -22,7 +22,7 @@ impl CheckpointBuilder {
             .as_ref()
             .and_then(|roots| changed_system_root(roots, &wire_messages));
         if let Some(message) = replacement {
-            let id = self.sync.persist(&message, &[]).await?;
+            let id = self.sync.persist(&message).await?;
             self.roots
                 .as_mut()
                 .ok_or_else(|| Error::Protocol("Cursor root frontier was not initialized".into()))?
@@ -48,7 +48,7 @@ impl CheckpointBuilder {
             }
         }
         for message in wire_messages.iter().skip(roots.ids.len()) {
-            roots.ids.push(self.sync.persist(message, &[]).await?);
+            roots.ids.push(self.sync.persist(message).await?);
             roots.generated.push(message.clone());
         }
         Ok(roots.ids.clone())
@@ -92,7 +92,7 @@ impl CheckpointBuilder {
             {
                 ids.push(previous_system.clone().expect("checked system root"));
             } else {
-                ids.push(self.sync.persist(message, &[]).await?);
+                ids.push(self.sync.persist(message).await?);
             }
         }
         self.roots = Some(RootFrontier {

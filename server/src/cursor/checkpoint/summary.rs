@@ -4,7 +4,7 @@ use prost::Message;
 use crate::{
     cursor::{checkpoint::PendingSteps, protocol::proto::agent::v1 as pb},
     model::{estimate_context_tokens, project_messages, CanonicalMessage, PromptSpec},
-    store::{BlobEdge, BlobId},
+    store::BlobId,
     Error, Result,
 };
 
@@ -39,7 +39,6 @@ impl CheckpointBuilder {
                     summary: summary.into(),
                 }
                 .encode_to_vec(),
-                &[],
             )
             .await?;
         let archive = pb::ConversationSummaryArchive {
@@ -48,19 +47,7 @@ impl CheckpointBuilder {
             window_tail: 0,
             summary_message: summary_message.as_bytes().to_vec(),
         };
-        let mut edges = summarized
-            .iter()
-            .enumerate()
-            .map(|(index, child)| BlobEdge {
-                child: child.clone(),
-                field_name: format!("summarized_messages[{index}]"),
-            })
-            .collect::<Vec<_>>();
-        edges.push(BlobEdge {
-            child: summary_message,
-            field_name: "summary_message".into(),
-        });
-        let archive_id = self.sync.persist(&archive.encode_to_vec(), &edges).await?;
+        let archive_id = self.sync.persist(&archive.encode_to_vec()).await?;
         let turn_ids = self.project_turns(mode, presentation).await?;
 
         for path in &presentation.read_paths {

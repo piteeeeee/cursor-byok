@@ -6,14 +6,12 @@ use std::path::PathBuf;
 use cursor_server::{
     config::RuntimeConfig,
     model::{CanonicalMessage, ModelConfig, ModelConfigInput, Origin, Role},
-    store::Store,
+    store::MemoryStore,
 };
 
-pub async fn temp_store() -> (tempfile::TempDir, Store) {
+pub async fn temp_store() -> (tempfile::TempDir, MemoryStore) {
     let directory = tempfile::tempdir().unwrap();
-    let url = format!("sqlite://{}", directory.path().join("test.db").display());
-    let store = Store::connect(&url).await.unwrap();
-    (directory, store)
+    (directory, MemoryStore::default())
 }
 
 /// Builds a configured model outside the database; step 3 removed model rows.

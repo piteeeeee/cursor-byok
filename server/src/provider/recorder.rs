@@ -1,397 +1,107 @@
-//! Records provider call timing and usage.
-use std::{
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
-    time::Instant,
-};
-
-use tokio::sync::Mutex;
-
+//! One summary row per finished provider attempt. Never receives request or response bodies.
+use super::{is_valid_response_event, ModelEvent};
 use crate::{
-    model::{NewLlmCall, Usage},
-    store::Store,
+    model::{ModelConfig, Usage},
+    store::{UsageRecord, UsageStore},
     Result,
 };
-
-use super::{is_valid_response_event, FinishReason, ModelEvent};
+use std::{sync::Arc, time::Instant};
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
-pub struct CallRecorder {
-    inner: Arc<Inner>,
+pub struct CallRecorder(Arc<Inner>);
+struct Inner {
+    store: UsageStore,
+    hash: String,
+    id: String,
+    display: String,
+    provider: String,
+    started: Instant,
+    state: Mutex<State>,
 }
-
-pub(crate) struct CancelOnDrop {
-    recorder: CallRecorder,
+#[derive(Default)]
+struct State {
+    finished: bool,
+    ttft: Option<i64>,
+    tokens: Usage,
 }
-
+pub(crate) struct CancelOnDrop(CallRecorder);
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        if self.recorder.is_finished() {
-            return;
-        }
-        let recorder = self.recorder.clone();
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            tracing::warn!(
-                call_id = recorder.call_id(),
-                "unfinished LLM call dropped outside Tokio runtime"
-            );
-            return;
-        };
-        runtime.spawn(async move {
-            if let Err(error) = recorder.cancelled().await {
-                tracing::warn!(call_id = recorder.call_id(), %error, "failed to mark dropped LLM call cancelled");
-            }
-        });
-    }
-}
-
-struct Inner {
-    store: Store,
-    base_call: NewLlmCall,
-    attempt: Mutex<AttemptState>,
-    next_generation: AtomicU64,
-    finished: AtomicBool,
-}
-
-struct AttemptState {
-    call_id: String,
-    started: Instant,
-    stream: StreamBuffer,
-    first_text_recorded: AtomicBool,
-    first_valid_response_recorded: AtomicBool,
-}
-
-impl AttemptState {
-    fn new(call_id: String) -> Self {
-        Self {
-            call_id,
-            started: Instant::now(),
-            stream: StreamBuffer::default(),
-            first_text_recorded: AtomicBool::new(false),
-            first_valid_response_recorded: AtomicBool::new(false),
-        }
-    }
-}
-
-/// Accumulates response stream volume between database writes so a long
-/// stream costs one `UPDATE` per window instead of one per chunk.
-#[derive(Default)]
-struct StreamBuffer {
-    bytes: usize,
-    events: usize,
-    first_chunk_at: Option<Instant>,
-    generation: u64,
-}
-
-const MAX_BUFFERED_CHUNKS: usize = 32;
-const MAX_BUFFERED_BYTES: usize = 256 * 1024;
-const MAX_BUFFER_AGE: std::time::Duration = std::time::Duration::from_millis(50);
-
-impl CallRecorder {
-    pub async fn start(store: Store, call: NewLlmCall) -> Result<Self> {
-        store.start_llm_call(&call).await?;
-        Ok(Self {
-            inner: Arc::new(Inner {
-                store,
-                base_call: call.clone(),
-                attempt: Mutex::new(AttemptState::new(call.call_id.clone())),
-                next_generation: AtomicU64::new(0),
-                finished: AtomicBool::new(false),
-            }),
-        })
-    }
-
-    pub fn is_finished(&self) -> bool {
-        self.inner.finished.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn cancel_on_drop(&self) -> CancelOnDrop {
-        CancelOnDrop {
-            recorder: self.clone(),
-        }
-    }
-
-    pub async fn request(&self, body: &serde_json::Value) -> Result<()> {
-        let attempt = self.inner.attempt.lock().await;
-        self.inner
-            .store
-            .record_llm_request(&attempt.call_id, body)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn response_headers(&self, status: u16) -> Result<()> {
-        let attempt = self.inner.attempt.lock().await;
-        self.inner
-            .store
-            .record_llm_response_headers(&attempt.call_id, elapsed_ms(attempt.started), status)
-            .await
-    }
-
-    pub async fn response_chunk(&self, data: &[u8]) -> Result<()> {
-        let mut attempt = self.inner.attempt.lock().await;
-        if self.is_finished() {
-            return Ok(());
-        }
-        let schedule_flush = if attempt.stream.events == 0 {
-            attempt.stream.generation = self
-                .inner
-                .next_generation
-                .fetch_add(1, Ordering::Relaxed)
-                .wrapping_add(1);
-            attempt.stream.first_chunk_at = Some(Instant::now());
-            Some(attempt.stream.generation)
-        } else {
-            None
-        };
-        attempt.stream.bytes += data.len();
-        attempt.stream.events += 1;
-        let expired = attempt
-            .stream
-            .first_chunk_at
-            .is_some_and(|started| started.elapsed() >= MAX_BUFFER_AGE);
-        if attempt.stream.events >= MAX_BUFFERED_CHUNKS
-            || attempt.stream.bytes >= MAX_BUFFERED_BYTES
-            || expired
-        {
-            self.flush_locked(&mut attempt).await?;
-        }
-        drop(attempt);
-        if let Some(generation) = schedule_flush {
-            let recorder = self.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(MAX_BUFFER_AGE).await;
-                if let Err(error) = recorder.flush_generation(generation).await {
-                    tracing::warn!(call_id = recorder.call_id(), %error, "failed to flush LLM stream totals");
+        let recorder = self.0.clone();
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                if let Err(e) = recorder.cancelled().await {
+                    tracing::warn!(%e,"record dropped provider call");
                 }
             });
         }
-        Ok(())
     }
-
-    pub async fn event(&self, event: &ModelEvent) -> Result<()> {
-        let attempt = self.inner.attempt.lock().await;
-        if is_valid_response_event(event)
-            && attempt
-                .first_valid_response_recorded
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-        {
-            if let Err(error) = self
-                .inner
-                .store
-                .record_llm_first_valid_response(&attempt.call_id, elapsed_ms(attempt.started))
-                .await
-            {
-                attempt
-                    .first_valid_response_recorded
-                    .store(false, Ordering::Release);
-                return Err(error);
-            }
+}
+impl CallRecorder {
+    pub(crate) fn new(store: UsageStore, model: &ModelConfig, provider: &str) -> Self {
+        Self(Arc::new(Inner {
+            store,
+            hash: model.model_hash.clone(),
+            id: model.model_id.clone(),
+            display: model.display_name.clone(),
+            provider: provider.into(),
+            started: Instant::now(),
+            state: Mutex::default(),
+        }))
+    }
+    pub(crate) fn cancel_on_drop(&self) -> CancelOnDrop {
+        CancelOnDrop(self.clone())
+    }
+    pub(crate) async fn is_finished(&self) -> bool {
+        self.0.state.lock().await.finished
+    }
+    pub(crate) async fn event(&self, event: &ModelEvent) -> Result<()> {
+        let mut s = self.0.state.lock().await;
+        if is_valid_response_event(event) && s.ttft.is_none() {
+            s.ttft = Some(self.0.started.elapsed().as_millis() as i64);
         }
-        drop(attempt);
-
         match event {
-            ModelEvent::TextDelta(delta) if !delta.trim().is_empty() => {
-                let attempt = self.inner.attempt.lock().await;
-                if attempt
-                    .first_text_recorded
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    if let Err(error) = self
-                        .inner
-                        .store
-                        .record_llm_first_text(&attempt.call_id, elapsed_ms(attempt.started))
-                        .await
-                    {
-                        attempt.first_text_recorded.store(false, Ordering::Release);
-                        return Err(error);
-                    }
-                }
+            ModelEvent::Usage(u) => s.tokens = *u,
+            ModelEvent::Done(_) => {
+                drop(s);
+                self.finish("ok", None).await?;
             }
-            ModelEvent::Usage(usage) => self.usage(*usage).await?,
-            ModelEvent::Done(reason) => self.completed(*reason).await?,
             _ => {}
         }
         Ok(())
     }
-
-    pub async fn usage(&self, usage: Usage) -> Result<()> {
-        let attempt = self.inner.attempt.lock().await;
-        self.inner
-            .store
-            .record_llm_usage(&attempt.call_id, usage)
-            .await
+    pub(crate) async fn failed(&self, error: &crate::Error) -> Result<()> {
+        let label = match error {
+            crate::Error::Http(e) if e.is_timeout() => "upstream timeout",
+            crate::Error::Http(_) => "upstream connection failed",
+            crate::Error::Provider(_) => "upstream provider error",
+            _ => "provider call failed",
+        };
+        self.finish("error", Some(label)).await
     }
-
-    pub async fn completed(&self, reason: FinishReason) -> Result<()> {
-        self.finish("completed", Some(finish_reason(reason)), None, None)
-            .await
+    pub(crate) async fn cancelled(&self) -> Result<()> {
+        self.finish("cancelled", None).await
     }
-
-    pub async fn failed(&self, error: &crate::Error) -> Result<()> {
-        self.finish(
-            "error",
-            None,
-            Some(error_kind(error)),
-            Some(&error.to_string()),
-        )
-        .await
-    }
-
-    pub async fn cancelled(&self) -> Result<()> {
-        self.finish("cancelled", None, None, None).await
-    }
-
-    async fn finish(
-        &self,
-        status: &str,
-        reason: Option<&str>,
-        error_kind: Option<&str>,
-        error_message: Option<&str>,
-    ) -> Result<()> {
-        if self.is_finished() {
-            return Ok(());
-        }
-        let mut attempt = self.inner.attempt.lock().await;
-        if self.is_finished() {
-            return Ok(());
-        }
-        self.flush_locked(&mut attempt).await?;
-        self.inner
-            .store
-            .finish_llm_call(
-                &attempt.call_id,
-                status,
-                reason,
-                elapsed_ms(attempt.started),
-                error_kind,
-                error_message,
-            )
-            .await?;
-        self.inner.finished.store(true, Ordering::Release);
-        Ok(())
-    }
-
-    async fn flush_generation(&self, generation: u64) -> Result<()> {
-        let mut attempt = self.inner.attempt.lock().await;
-        if attempt.stream.generation != generation {
-            return Ok(());
-        }
-        self.flush_locked(&mut attempt).await
-    }
-
-    async fn flush_locked(&self, attempt: &mut AttemptState) -> Result<()> {
-        let buffer = &mut attempt.stream;
-        if buffer.events == 0 {
-            return Ok(());
-        }
-        let bytes = std::mem::take(&mut buffer.bytes);
-        let events = std::mem::take(&mut buffer.events);
-        buffer.first_chunk_at = None;
-        if let Err(error) = self
-            .inner
-            .store
-            .record_llm_stream_totals(&attempt.call_id, bytes as i64, events as i64)
-            .await
-        {
-            buffer.bytes = bytes;
-            buffer.events = events;
-            buffer.first_chunk_at = Some(Instant::now());
-            return Err(error);
+    async fn finish(&self, status: &str, error_summary: Option<&str>) -> Result<()> {
+        let i = &self.0;
+        let mut s = i.state.lock().await;
+        if !s.finished {
+            i.store
+                .record(UsageRecord {
+                    model_hash: &i.hash,
+                    model_id: &i.id,
+                    display_name: &i.display,
+                    provider_name: &i.provider,
+                    tokens: s.tokens,
+                    ttft_ms: s.ttft,
+                    duration_ms: i.started.elapsed().as_millis() as i64,
+                    status,
+                    error_summary,
+                })
+                .await?;
+            s.finished = true;
         }
         Ok(())
-    }
-
-    fn call_id(&self) -> String {
-        self.inner
-            .attempt
-            .try_lock()
-            .map(|attempt| attempt.call_id.clone())
-            .unwrap_or_else(|_| self.inner.base_call.call_id.clone())
-    }
-}
-
-fn elapsed_ms(started: Instant) -> i64 {
-    started.elapsed().as_millis().min(i64::MAX as u128) as i64
-}
-
-fn finish_reason(reason: FinishReason) -> &'static str {
-    match reason {
-        FinishReason::Stop => "stop",
-        FinishReason::Length => "length",
-        FinishReason::ToolUse => "tool_use",
-    }
-}
-
-fn error_kind(error: &crate::Error) -> &'static str {
-    match error {
-        crate::Error::Provider(_) | crate::Error::Http(_) => "provider",
-        crate::Error::Cancelled => "cancelled",
-        crate::Error::Database(_) | crate::Error::Store(_) => "store",
-        _ => "internal",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::model::{NewLlmCall, ProviderType};
-
-    use super::*;
-
-    #[tokio::test]
-    async fn dropping_an_unfinished_call_guard_marks_the_call_cancelled() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::connect(&format!(
-            "sqlite://{}",
-            directory.path().join("test.db").display()
-        ))
-        .await
-        .unwrap();
-        let recorder = CallRecorder::start(
-            store.clone(),
-            NewLlmCall {
-                call_id: "cancel-on-drop".into(),
-                run_id: "run".into(),
-                conversation_id: "conversation".into(),
-                provider_call_index: 0,
-                model_hash: "test-model-hash".into(),
-                provider_type: ProviderType::OpenAiChat,
-                provider_url: "https://example.com".into(),
-                request_type: ProviderType::OpenAiChat,
-                request_url: "https://example.com/v1/chat/completions".into(),
-                model_id: "test-model".into(),
-                display_name: "Test Model".into(),
-                reasoning_effort: None,
-                fast: false,
-                message_count: 1,
-                tool_count: 0,
-            },
-        )
-        .await
-        .unwrap();
-
-        drop(recorder.cancel_on_drop());
-
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
-        loop {
-            let status: String =
-                sqlx::query_scalar("SELECT status FROM llm_calls WHERE call_id = ?")
-                    .bind("cancel-on-drop")
-                    .fetch_one(store.pool())
-                    .await
-                    .unwrap();
-            if status == "cancelled" {
-                break;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "unfinished recorder stayed running after its stream was dropped"
-            );
-            tokio::task::yield_now().await;
-        }
     }
 }

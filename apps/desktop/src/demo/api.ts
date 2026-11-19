@@ -1,10 +1,6 @@
 import type {
-  CallDetail,
   CursorHarnessStatus,
-  LlmCall,
   Model,
-  Overview,
-  OverviewTokenUsageBucket,
   ProxySettings,
   StatisticsStorage,
 } from "../shared/api";
@@ -31,46 +27,6 @@ const models: Model[] = [
   createModel({ hash: "mock-mistral-small", order: 16, name: "Mistral Small", type: "openai", url: "https://api.mistral.ai", modelId: "mistral-small-latest", endpoint: "/v1/chat/completions" }),
 ];
 
-const calls: LlmCall[] = Array.from({ length: 24 }, (_, index) => {
-  const model = models[index % models.length];
-  const failed = index === 7 || index === 19;
-  return {
-    call_kind: "provider_llm",
-    route: "local_byok",
-    call_id: `mock-call-${String(index + 1).padStart(3, "0")}`,
-    run_id: `mock-run-${Math.floor(index / 3) + 1}`,
-    conversation_id: `mock-conversation-${Math.floor(index / 4) + 1}`,
-    provider_call_index: index + 1,
-    model_hash: model.model_hash,
-    provider_type: model.type,
-    provider_url: model.base_url,
-    request_type: model.type === "anthropic" ? "messages" : "responses",
-    request_url: model.type === "anthropic" ? `${model.base_url}/v1/messages` : `${model.base_url}${model.openai_endpoint}`,
-    model_id: model.model_id,
-    display_name: model.display_name,
-    reasoning_effort: index % 2 === 0 ? "high" : null,
-    fast: index % 3 === 0,
-    status: failed ? "failed" : "completed",
-    finish_reason: failed ? null : "stop",
-    created_at_ms: FIXED_NOW - index * 3 * 60_000,
-    ttfb_ms: 210 + index * 13,
-    ttfr_ms: 290 + index * 15,
-    ttft_ms: 370 + index * 17,
-    duration_ms: failed ? 812 : 1_420 + index * 71,
-    input_tokens: 4_800 + index * 337,
-    output_tokens: failed ? 0 : 820 + index * 43,
-    total_tokens: failed ? 4_800 + index * 337 : 5_620 + index * 380,
-    cache_read_tokens: 3_100 + index * 251,
-    cache_write_tokens: 320 + index * 19,
-    reasoning_tokens: index % 2 === 0 ? 420 + index * 11 : null,
-    message_count: 14 + (index % 8),
-    tool_count: 3 + (index % 5),
-    http_status: failed ? 429 : 200,
-    error_kind: failed ? "provider_rate_limit" : null,
-    error_message: failed ? "Mock provider rate limit" : null,
-  };
-});
-
 let harnessStatus: CursorHarnessStatus = {
   platform: "macos",
   ca: "ready",
@@ -90,7 +46,7 @@ let proxySettings: ProxySettings = {
   username: "",
   has_password: false,
 };
-let storage: StatisticsStorage = { call_count: calls.length };
+let storage: StatisticsStorage = { call_count: 24 };
 
 export function installDemoApi() {
   const nativeFetch = window.fetch.bind(window);
@@ -118,9 +74,8 @@ export function installDemoApi() {
     if (/^\/models\/[^/]+\/test\/[^/]+$/.test(path) || /^\/models\/[^/]+$/.test(path)) {
       return method === "DELETE" ? empty() : json(models[0]);
     }
-    if (path === "/overview") return json(createOverview(url.searchParams));
-    if (path === "/llm-calls") return json(calls);
-    if (path.startsWith("/llm-calls/")) return json(createCallDetail(path.slice("/llm-calls/".length)));
+    if (path === "/usage") return json({ today_tokens: 1200, month_tokens: 42000 });
+    if (path === "/usage/export") return json("exports/demo.csv");
     if (path === "/harness/cursor/status") return json(harnessStatus);
     if (path === "/harness/cursor/ca/initialize") return json(harnessStatus);
     if (path === "/harness/cursor/enabled") {
@@ -200,58 +155,6 @@ function createModel({ hash, order, name, type, url, modelId, endpoint = "/v1/re
     created_at_ms: FIXED_NOW - order * 86_400_000,
     updated_at_ms: FIXED_NOW,
   };
-}
-
-function createOverview(params: URLSearchParams): Overview {
-  const start = Number(params.get("start_ms"));
-  const end = Number(params.get("end_ms"));
-  const duration = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : 365 * 86_400_000;
-  const granularity = duration <= 2 * 60 * 60_000 ? "minute" : duration <= 2 * 86_400_000 ? "hour" : "day";
-  const step = granularity === "minute" ? 60_000 : granularity === "hour" ? 3_600_000 : 86_400_000;
-  const count = granularity === "minute" ? Math.min(60, Math.max(10, Math.ceil(duration / step))) : granularity === "hour" ? Math.min(24, Math.max(8, Math.ceil(duration / step))) : Math.min(365, Math.max(7, Math.ceil(duration / step)));
-  const series = createSeries(count, step, Number.isFinite(end) && end > 0 ? end : FIXED_NOW);
-  const totals = series.reduce((sum, bucket) => ({
-    input: sum.input + bucket.input_tokens,
-    cacheRead: sum.cacheRead + bucket.cache_read_tokens,
-    cacheWrite: sum.cacheWrite + bucket.cache_write_tokens,
-    output: sum.output + bucket.output_tokens,
-  }), { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
-  const llmCalls = Math.max(12, Math.round(count * 5.4));
-
-  return {
-    metrics: {
-      llm_calls: llmCalls,
-      successful_calls: llmCalls - Math.max(1, Math.floor(llmCalls * 0.008)),
-      failed_calls: Math.max(1, Math.floor(llmCalls * 0.008)),
-      token_usage: totals.input + totals.cacheRead + totals.cacheWrite + totals.output,
-      prompt_tokens: totals.input + totals.cacheRead + totals.cacheWrite,
-      input_tokens: totals.input,
-      cache_read_tokens: totals.cacheRead,
-      cache_write_tokens: totals.cacheWrite,
-      output_tokens: totals.output,
-    },
-    token_usage_granularity: granularity,
-    token_usage_series: series,
-  };
-}
-
-function createSeries(count: number, step: number, end: number): OverviewTokenUsageBucket[] {
-  return Array.from({ length: count }, (_, index) => {
-    const wave = 0.72 + ((index * 17) % 31) / 50;
-    return {
-      bucket_start_ms: end - (count - index) * step,
-      // input : cache_read = 1 : 99，使默认口径缓存命中率恰为 99%
-      input_tokens: Math.round(800 * wave),
-      cache_read_tokens: Math.round(79_200 * wave),
-      cache_write_tokens: Math.round(7_500 * wave),
-      output_tokens: Math.round(12_500 * wave),
-    };
-  });
-}
-
-function createCallDetail(id: string): CallDetail {
-  const call = calls.find((item) => item.call_id === decodeURIComponent(id)) ?? calls[0];
-  return { call };
 }
 
 async function readBody(input: RequestInfo | URL, init?: RequestInit): Promise<unknown> {

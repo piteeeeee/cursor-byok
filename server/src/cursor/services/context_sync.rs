@@ -1,12 +1,11 @@
 //! Hydrates request context blobs supplied by Cursor.
 use std::{sync::Arc, time::Duration};
 
-use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
 use crate::{
     cursor::{protocol::proto::agent::v1 as pb, transport::TransportHandle},
-    store::{BlobId, Store},
+    store::{BlobId, MemoryStore},
     Error, Result,
 };
 
@@ -15,17 +14,31 @@ type ContextSender = oneshot::Sender<Result<pb::RequestContext>>;
 #[derive(Clone)]
 pub(crate) struct RequestContextSynchronizer {
     handle: TransportHandle,
-    store: Store,
+    store: MemoryStore,
     pending: Arc<Mutex<Option<ContextSender>>>,
+    last: Arc<parking_lot::Mutex<Option<(String, pb::RequestContext)>>>,
 }
 
 impl RequestContextSynchronizer {
-    pub(crate) fn new(handle: TransportHandle, store: Store) -> Self {
+    pub(crate) fn new(handle: TransportHandle, store: MemoryStore) -> Self {
         Self {
             handle,
             store,
             pending: Arc::new(Mutex::new(None)),
+            last: Default::default(),
         }
+    }
+
+    pub(crate) fn previous(&self, conversation: &str) -> Option<pb::RequestContext> {
+        self.last
+            .lock()
+            .as_ref()
+            .filter(|(id, _)| id == conversation)
+            .map(|(_, ctx)| ctx.clone())
+    }
+
+    pub(crate) fn remember(&self, conversation: &str, context: &pb::RequestContext) {
+        *self.last.lock() = Some((conversation.to_owned(), context.clone()));
     }
 
     pub(crate) async fn refresh_if_missing(
@@ -33,18 +46,47 @@ impl RequestContextSynchronizer {
         references: &pb::RequestContextPartReferences,
         conversation_id: &str,
     ) -> Result<Option<pb::RequestContext>> {
-        if !self.has_missing_part(references).await? {
+        let mut key = [None, None, None, None];
+        for (slot, raw) in key.iter_mut().zip([
+            &references.rules_blob_id,
+            &references.skills_blob_id,
+            &references.subagents_blob_id,
+            &references.mcps_blob_id,
+        ]) {
+            if !raw.is_empty() {
+                *slot = Some(BlobId::from_bytes(raw)?);
+            }
+        }
+        if let Some(parts) = self.store.context(&key) {
+            return Ok(Some((*parts).clone()));
+        }
+        if key
+            .iter()
+            .flatten()
+            .all(|id| self.store.get_blob(id).is_some())
+        {
             return Ok(None);
         }
-        let context = self.load(conversation_id).await?;
-        self.cache_parts(&context).await?;
-        Ok(Some(context))
+        let full = self.load(conversation_id).await?;
+        let parts = pb::RequestContext {
+            rules: full.rules,
+            non_file_rules: full.non_file_rules,
+            cloud_rule: full.cloud_rule,
+            agent_skills: full.agent_skills,
+            skill_options: full.skill_options,
+            custom_subagents: full.custom_subagents,
+            tools: full.tools,
+            mcp_instructions: full.mcp_instructions,
+            mcp_file_system_options: full.mcp_file_system_options,
+            mcp_meta_tool_options: full.mcp_meta_tool_options,
+            ..Default::default()
+        };
+        self.store.cache_context(key, parts.clone());
+        Ok(Some(parts))
     }
-
     pub(crate) async fn get(&self, id: &BlobId) -> Result<Option<Vec<u8>>> {
-        self.store.get_blob(id).await
+        Ok(self.store.get_blob(id))
     }
-
     pub(crate) async fn load(&self, conversation_id: &str) -> Result<pb::RequestContext> {
         let (sender, receiver) = oneshot::channel();
         let mut pending = self.pending.lock().await;
@@ -144,54 +186,5 @@ impl RequestContextSynchronizer {
         let Some(sender) = sender else { return false };
         let _ = sender.send(Err(Error::Protocol(message)));
         true
-    }
-
-    async fn has_missing_part(&self, parts: &pb::RequestContextPartReferences) -> Result<bool> {
-        for raw_id in [
-            parts.rules_blob_id.as_slice(),
-            parts.skills_blob_id.as_slice(),
-            parts.subagents_blob_id.as_slice(),
-            parts.mcps_blob_id.as_slice(),
-        ] {
-            if raw_id.is_empty() {
-                continue;
-            }
-            let id = BlobId::from_bytes(raw_id)?;
-            if self.store.get_blob(&id).await?.is_none() {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    async fn cache_parts(&self, context: &pb::RequestContext) -> Result<()> {
-        self.cache_part(&pb::RequestContextRulesPart {
-            rules: context.rules.clone(),
-            non_file_rules: context.non_file_rules.clone(),
-            cloud_rule: context.cloud_rule.clone(),
-        })
-        .await?;
-        self.cache_part(&pb::RequestContextSkillsPart {
-            agent_skills: context.agent_skills.clone(),
-            skill_options: context.skill_options.clone(),
-        })
-        .await?;
-        self.cache_part(&pb::RequestContextSubagentsPart {
-            custom_subagents: context.custom_subagents.clone(),
-        })
-        .await?;
-        self.cache_part(&pb::RequestContextMcpsPart {
-            tools: context.tools.clone(),
-            mcp_instructions: context.mcp_instructions.clone(),
-            mcp_file_system_options: context.mcp_file_system_options.clone(),
-            mcp_meta_tool_options: context.mcp_meta_tool_options.clone(),
-        })
-        .await
-    }
-
-    async fn cache_part<T: Message>(&self, part: &T) -> Result<()> {
-        let data = part.encode_to_vec();
-        self.store.put_blob(&data, &[]).await?;
-        Ok(())
     }
 }

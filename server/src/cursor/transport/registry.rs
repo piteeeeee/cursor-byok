@@ -15,7 +15,7 @@ use crate::{
     cursor::{conversation::ConversationRegistry, prompting::PromptCompiler},
     provider::Provider,
     search::WebCache,
-    store::Store,
+    store::MemoryStore,
     Result,
 };
 
@@ -31,7 +31,7 @@ struct RegistryInner {
     next_local_generation: AtomicU64,
     upstream: Mutex<HashMap<String, u64>>,
     route_changed: Notify,
-    store: Store,
+    store: MemoryStore,
     models: Models,
     web_cache: WebCache,
     conversations: ConversationRegistry,
@@ -51,7 +51,7 @@ pub enum TransportRoute {
 
 impl TransportRegistry {
     pub fn new(
-        store: Store,
+        store: MemoryStore,
         runtime: crate::config::RuntimeConfig,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
@@ -60,7 +60,7 @@ impl TransportRegistry {
     }
 
     pub fn with_web_cache(
-        store: Store,
+        store: MemoryStore,
         runtime: crate::config::RuntimeConfig,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
@@ -70,7 +70,7 @@ impl TransportRegistry {
     }
 
     fn build(
-        store: Store,
+        store: MemoryStore,
         runtime: crate::config::RuntimeConfig,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
@@ -96,7 +96,7 @@ impl TransportRegistry {
         }
     }
 
-    pub fn store(&self) -> &Store {
+    pub fn store(&self) -> &MemoryStore {
         &self.inner.store
     }
 

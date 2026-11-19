@@ -11,6 +11,17 @@ use crate::model::{
 use super::{decode, decode_pending, encode::wire_message, staged_tool_round};
 
 #[test]
+fn restored_read_image_has_a_model_visible_placeholder() {
+    let root = json!({"role":"tool","content":[{"toolName":"Read","toolCallId":"read-image","result":"Read image file: /tmp/image.png"}]});
+    let restored = decode(&serde_json::to_vec(&root).unwrap(), "root".into()).unwrap();
+    let MessageContent::ToolResult(tool) = restored.content else {
+        panic!("expected tool result")
+    };
+    assert!(tool.content.contains("[图片在助手重启后不可用]"));
+    assert!(tool.image.is_none());
+}
+
+#[test]
 fn pending_tool_round_is_one_complete_assistant_message_and_round_trips() {
     let replay_state = ProviderReplayState {
         provider_kind: "anthropic".into(),

@@ -2,7 +2,7 @@
 use crate::Result;
 use axum::{extract::State, Json};
 
-use crate::store::{
+use super::preferences::{
     DesktopSettings, PortSettings, ProxySettings, StatisticsStorage, TokenPricingSettings,
 };
 

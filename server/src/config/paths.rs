@@ -37,8 +37,8 @@ impl Paths {
         Self {
             config_file: app_dir.join(CONFIG_FILE_NAME),
             ca_dir: app_dir.join(CA_DIR_NAME),
-            previous_database: super::previous_database_path(home),
-            previous_ca_dir: home.join(super::PREVIOUS_APP_DIR_NAME).join(CA_DIR_NAME),
+            previous_database: home.join(".cursor-byok-v3").join("cursor-byok.db"),
+            previous_ca_dir: home.join(".cursor-byok-v3").join(CA_DIR_NAME),
             app_dir,
         }
     }

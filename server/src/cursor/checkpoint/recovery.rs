@@ -12,7 +12,7 @@ impl CheckpointBuilder {
     pub async fn import_prefetched(&self, blobs: &[pb::PreFetchedBlob]) -> Result<()> {
         for blob in blobs {
             let expected = BlobId::from_bytes(&blob.id)?;
-            let actual = self.store.put_blob(&blob.value, &[]).await?;
+            let actual = self.store.put_blob(&blob.value);
             if expected != actual {
                 return Err(Error::Protocol(format!(
                     "prefetched Blob hash mismatch: {}",

@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     model::{CheckpointId, PreparedRun, ToolCall, ToolResult, ToolRoundAssistant, ToolRoundId},
-    store::Store,
+    store::MemoryStore,
 };
 
 use super::{
@@ -21,7 +21,7 @@ pub(super) struct ToolRound {
 }
 
 pub(super) async fn execute(
-    store: &Store,
+    store: &MemoryStore,
     prepared: &PreparedRun,
     client: &mut RunPort,
     cancellation: &CancellationToken,

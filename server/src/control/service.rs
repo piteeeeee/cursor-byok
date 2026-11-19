@@ -1,4 +1,5 @@
-//! Implements control API routing and shared state.
+use super::preferences::*;
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -13,20 +14,19 @@ use crate::{
     config::{Config, Models},
     local_app::CursorHarness,
     model::{
-        ContentPart, LlmCallSummary, ModelConfig, ModelInvocation, ModelRequest, ModelSpec,
-        Overview, ProjectedContent, ProjectedMessage, PromptSpec, Role,
+        ContentPart, ModelConfig, ModelInvocation, ModelRequest, ModelSpec, ProjectedContent,
+        ProjectedMessage, PromptSpec, Role,
     },
     provider::{is_valid_response_event, ModelEvent, Provider},
-    store::{
-        DesktopSettings, PortSettings, ProxyMode, ProxySettings, StatisticsStorage, Store,
-        TokenPricingSettings,
-    },
+    store::{UsageStore, UsageSummary},
     Error, Result,
 };
 
 #[derive(Clone)]
 pub struct ControlService {
-    store: Store,
+    store: UsageStore,
+    preferences: Arc<Mutex<(DesktopSettings, TokenPricingSettings)>>,
+    exports: std::path::PathBuf,
     config: Config,
     cursor_harness: CursorHarness,
     provider: Arc<dyn Provider>,
@@ -43,30 +43,18 @@ pub struct ModelConnectivityResult {
     pub output: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct CallDetail {
-    pub call: CallSummary,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct CallSummary {
-    #[serde(flatten)]
-    pub call: LlmCallSummary,
-    pub call_kind: &'static str,
-    pub route: &'static str,
-}
-
 impl ControlService {
     pub fn new(
-        store: Store,
+        store: UsageStore,
         provider: Arc<dyn Provider>,
         _clients: crate::network::NetworkClients,
         config: Config,
         ca_dir: std::path::PathBuf,
     ) -> Result<Self> {
         Ok(Self {
+            preferences: Arc::default(),
+            exports: ca_dir.with_file_name("exports"),
             cursor_harness: CursorHarness::new(
-                store.clone(),
                 config.proxy_port,
                 config.models.all().len(),
                 ca_dir,
@@ -94,18 +82,17 @@ impl ControlService {
         &self.config.default_model
     }
 
-    pub async fn overview(
-        &self,
-        start_ms: Option<i64>,
-        end_ms: Option<i64>,
-        model_hashes: Option<&str>,
-        bucket_ms: Option<i64>,
-    ) -> Result<Overview> {
-        self.store
-            .overview(start_ms, end_ms, model_hashes, bucket_ms)
-            .await
+    pub async fn summary(&self) -> Result<UsageSummary> {
+        self.store.today_and_month_summary().await
     }
-
+    pub async fn export_csv(&self) -> Result<String> {
+        tokio::fs::create_dir_all(&self.exports).await?;
+        let path = self
+            .exports
+            .join(format!("usage-{}.csv", uuid::Uuid::new_v4()));
+        self.store.export_csv(&path).await?;
+        Ok(path.display().to_string())
+    }
     pub async fn test_model(
         &self,
         model_hash: &str,
@@ -221,16 +208,7 @@ impl ControlService {
             Ok(result) => result?,
             Err(_) => {
                 cancellation.cancel();
-                self.store
-                    .finish_llm_call(
-                        &call_id,
-                        "error",
-                        None,
-                        started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-                        Some("timeout"),
-                        Some("model connectivity test timed out after 45 seconds"),
-                    )
-                    .await?;
+
                 return Err(Error::Provider(
                     "model connectivity test timed out after 45 seconds".into(),
                 ));
@@ -264,35 +242,6 @@ impl ControlService {
         })
     }
 
-    pub async fn calls(&self, limit: i64) -> Result<Vec<CallSummary>> {
-        Ok(self
-            .store
-            .llm_calls(limit)
-            .await?
-            .into_iter()
-            .map(|call| CallSummary {
-                call,
-                call_kind: "provider_llm",
-                route: "local_byok",
-            })
-            .collect())
-    }
-
-    pub async fn call(&self, call_id: &str) -> Result<CallDetail> {
-        let call = self
-            .store
-            .llm_call(call_id)
-            .await?
-            .ok_or_else(|| Error::RunNotFound(format!("call {call_id}")))?;
-        Ok(CallDetail {
-            call: CallSummary {
-                call,
-                call_kind: "provider_llm",
-                route: "local_byok",
-            },
-        })
-    }
-
     pub fn ports(&self) -> PortSettings {
         PortSettings {
             proxy_port: self.config.proxy_port,
@@ -301,11 +250,14 @@ impl ControlService {
     }
 
     pub async fn statistics_storage(&self) -> Result<StatisticsStorage> {
-        self.store.statistics_storage().await
+        Ok(StatisticsStorage {
+            call_count: self.store.count().await?,
+        })
     }
 
     pub async fn clear_statistics_storage(&self) -> Result<StatisticsStorage> {
-        self.store.clear_statistics_storage().await
+        self.store.clear().await?;
+        self.statistics_storage().await
     }
 
     pub fn proxy_settings(&self) -> ProxySettings {
@@ -322,22 +274,24 @@ impl ControlService {
     }
 
     pub async fn desktop_settings(&self) -> Result<DesktopSettings> {
-        self.store.desktop_settings().await
+        Ok(self.preferences.lock().unwrap().0)
     }
 
     pub async fn set_desktop_settings(&self, settings: DesktopSettings) -> Result<()> {
-        self.store.set_desktop_settings(settings).await
+        self.preferences.lock().unwrap().0 = settings;
+        Ok(())
     }
 
     pub async fn pricing_settings(&self) -> Result<TokenPricingSettings> {
-        self.store.pricing_settings().await
+        Ok(self.preferences.lock().unwrap().1)
     }
 
     pub async fn set_pricing_settings(
         &self,
         settings: TokenPricingSettings,
     ) -> Result<TokenPricingSettings> {
-        self.store.set_pricing_settings(settings).await
+        self.preferences.lock().unwrap().1 = settings;
+        Ok(settings)
     }
 }
 

@@ -4,6 +4,7 @@ mod ca;
 mod process;
 mod proxy;
 mod settings;
+mod state;
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -11,7 +12,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::{store::Store, Error, Result};
+use crate::{Error, Result};
 
 use self::{ca::CaManager, proxy::ProxyRuntime};
 
@@ -71,7 +72,7 @@ pub struct CursorHarness {
 }
 
 struct Inner {
-    store: Store,
+    state_path: std::path::PathBuf,
     proxy_port: u16,
     configured_models: usize,
     ca: CaManager,
@@ -82,14 +83,13 @@ struct Inner {
 
 impl CursorHarness {
     pub fn new(
-        store: Store,
         proxy_port: u16,
         configured_models: usize,
         ca_dir: std::path::PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(Inner {
-                store,
+                state_path: ca_dir.with_file_name("state.json"),
                 proxy_port,
                 configured_models,
                 ca: CaManager::managed(ca_dir)?,
@@ -113,10 +113,13 @@ impl CursorHarness {
     }
 
     pub async fn status(&self) -> Result<CursorHarnessStatus> {
+        self.status_with_ca(self.inner.ca.state()?).await
+    }
+
+    async fn status_with_ca(&self, ca: CaState) -> Result<CursorHarnessStatus> {
         let configured_models = self.inner.configured_models;
         let enabled_models = configured_models;
-        let ca = self.inner.ca.state()?;
-        if self.inner.store.cursor_takeover_enabled().await?
+        if !state::paused(&self.inner.state_path)?
             && matches!(ca, CaState::Ready)
             && self.inner.backend_addr.read().is_some()
         {
@@ -156,11 +159,10 @@ impl CursorHarness {
     }
 
     pub async fn set_enabled(&self, enabled: bool) -> Result<CursorHarnessStatus> {
+        state::set_paused(&self.inner.state_path, !enabled)?;
         if enabled {
-            self.inner.store.set_cursor_takeover_enabled(true).await?;
             self.enable().await?;
         } else {
-            self.inner.store.set_cursor_takeover_enabled(false).await?;
             self.disable().await?;
         }
         self.status().await
@@ -217,4 +219,43 @@ impl CursorHarness {
 async fn apply_cursor_configuration(proxy_url: &str) -> Result<()> {
     account::inject_if_missing().await?;
     settings::write_proxy_settings(proxy_url)
+}
+
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_pause_survives_restart_even_when_ca_and_backend_are_ready() {
+        let home = tempfile::tempdir().unwrap();
+        let ca = home.path().join("ca");
+        let path = home.path().join("state.json");
+        let first = CursorHarness::new(0, 1, ca.clone()).unwrap();
+        assert!(!state::paused(&path).unwrap());
+        // Persist the same choice set_enabled(false) makes without touching Cursor settings.
+        state::set_paused(&first.inner.state_path, true).unwrap();
+        drop(first);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"paused":true}"#
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let restarted = CursorHarness::new(0, 1, ca).unwrap();
+        restarted.set_backend_addr("127.0.0.1:0".parse().unwrap());
+        // No real trusted CA or process commands are used: entering enable() would fail.
+        let status = restarted.status_with_ca(CaState::Ready).await.unwrap();
+        assert!(matches!(status.integration, IntegrationState::Disabled));
+        assert!(matches!(
+            restarted.status().await.unwrap().integration,
+            IntegrationState::Disabled
+        ));
+        assert!(restarted.proxy_port().await.is_none());
+    }
 }

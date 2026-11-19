@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { api, type CursorHarnessStatus, type LlmCall, type Model, type Overview, type PortSettings, type TokenPricingSettings } from "../api";
+import { api, type CursorHarnessStatus, type Model, type UsageSummary, type PortSettings, type TokenPricingSettings } from "../api";
 import { applyTheme, isThemeId, type ThemeId } from "../theme/theme";
 
 export const DEFAULT_TOKEN_PRICING: TokenPricingSettings = {
@@ -11,8 +11,7 @@ export const DEFAULT_TOKEN_PRICING: TokenPricingSettings = {
 
 export type AppSnapshot = {
   models: Model[];
-  calls: LlmCall[];
-  overview: Overview;
+  usage: UsageSummary;
   ports: PortSettings;
   pricing: TokenPricingSettings;
   busy: boolean;
@@ -29,22 +28,7 @@ const savedTheme = (): ThemeId => {
 
 let snapshot: AppSnapshot = {
   models: [],
-  calls: [],
-  overview: {
-    metrics: {
-      llm_calls: 0,
-      successful_calls: 0,
-      failed_calls: 0,
-      token_usage: 0,
-      prompt_tokens: 0,
-      input_tokens: 0,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-      output_tokens: 0,
-    },
-    token_usage_granularity: "day",
-    token_usage_series: [],
-  },
+  usage: { today_tokens: 0, month_tokens: 0 },
   ports: { proxy_port: 0, service_port: 0 },
   pricing: DEFAULT_TOKEN_PRICING,
   busy: false,
@@ -61,15 +45,6 @@ function update(patch: Partial<AppSnapshot>) {
   listeners.forEach((listener) => listener());
 }
 
-async function perform(task: () => Promise<void>) {
-  update({ error: null });
-  try {
-    await task();
-  } catch (cause) {
-    update({ error: cause instanceof Error ? cause.message : String(cause) });
-  }
-}
-
 export const appStore = {
   subscribe(listener: () => void) {
     listeners.add(listener);
@@ -80,15 +55,14 @@ export const appStore = {
   async refresh() {
     update({ busy: true, error: null });
     try {
-      const [models, calls, overview, ports, pricing, cursorHarness] = await Promise.all([
+      const [models, usage, ports, pricing, cursorHarness] = await Promise.all([
         api.models(),
-        api.calls(),
-        api.overview(),
+        api.usage(),
         api.ports(),
         api.pricingSettings(),
         api.cursorHarness(),
       ]);
-      update({ models, calls, overview, ports, pricing, cursorHarness });
+      update({ models, usage, ports, pricing, cursorHarness });
     } catch (cause) {
       update({ error: cause instanceof Error ? cause.message : String(cause) });
     } finally {
@@ -112,17 +86,6 @@ export const appStore = {
     try { update({ cursorHarness: await api.setCursorEnabled(enabled) }); }
     catch (cause) { update({ error: cause instanceof Error ? cause.message : String(cause) }); }
     finally { update({ cursorBusy: false }); }
-  },
-  async refreshCalls() {
-    try {
-      update({ calls: await api.calls() });
-    } catch (cause) {
-      update({ error: cause instanceof Error ? cause.message : String(cause) });
-    }
-  },
-
-  async openCallDetails(callId: string) {
-    await perform(() => api.openCallDetails(callId));
   },
   async updatePricingSettings(pricing: TokenPricingSettings) {
     try {

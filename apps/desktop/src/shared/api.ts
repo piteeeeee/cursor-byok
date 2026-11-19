@@ -81,73 +81,7 @@ export interface TokenPricingSettings {
   cache_write_per_million: number;
 }
 
-export interface OverviewMetrics {
-  llm_calls: number;
-  successful_calls: number;
-  failed_calls: number;
-  token_usage: number;
-  prompt_tokens: number;
-  input_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  output_tokens: number;
-}
-
-export type TokenUsageGranularity = "minute" | "hour" | "day";
-
-export interface OverviewTokenUsageBucket {
-  bucket_start_ms: number;
-  input_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  output_tokens: number;
-}
-
-export interface Overview {
-  metrics: OverviewMetrics;
-  token_usage_granularity: TokenUsageGranularity;
-  token_usage_series: OverviewTokenUsageBucket[];
-}
-
-export interface LlmCall {
-  call_kind: "provider_llm" | "cursor_official";
-  route: "local_byok" | "cursor_official";
-  call_id: string;
-  run_id: string;
-  conversation_id: string;
-  provider_call_index: number;
-  model_hash: string | null;
-  provider_type: string;
-  provider_url: string;
-  request_type: string;
-  request_url: string;
-  model_id: string;
-  display_name: string;
-  reasoning_effort: string | null;
-  fast: boolean | null;
-  status: string;
-  finish_reason: string | null;
-  created_at_ms: number;
-  ttfb_ms: number | null;
-  ttft_ms: number | null;
-  ttfr_ms: number | null;
-  duration_ms: number | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  total_tokens: number | null;
-  cache_read_tokens: number | null;
-  cache_write_tokens: number | null;
-  reasoning_tokens: number | null;
-  message_count: number;
-  tool_count: number;
-  http_status: number | null;
-  error_kind: string | null;
-  error_message: string | null;
-}
-
-export interface CallDetail {
-  call: LlmCall;
-}
+export interface UsageSummary { today_tokens: number; month_tokens: number }
 
 const packagedDesktop = "__TAURI_INTERNALS__" in window
   || window.location.protocol === "tauri:"
@@ -183,17 +117,8 @@ export const api = {
   models: () => request<Model[]>("/models"),
   testModel: (hash: string, testId: string, signal?: AbortSignal) => request<ModelConnectivityResult>(`/models/${encodeURIComponent(hash)}/test/${encodeURIComponent(testId)}`, { method: "POST", signal }),
   cancelModelTest: (hash: string, testId: string) => request<void>(`/models/${encodeURIComponent(hash)}/test/${encodeURIComponent(testId)}`, { method: "DELETE" }),
-  overview: (filter?: { startMs: number; endMs: number; modelHashes?: string[]; bucketMs?: number }) => {
-    const params = new URLSearchParams();
-    if (filter) {
-      params.set("start_ms", String(filter.startMs));
-      params.set("end_ms", String(filter.endMs));
-      if (filter.modelHashes?.length) params.set("model_hashes", JSON.stringify(filter.modelHashes));
-      if (filter.bucketMs) params.set("bucket_ms", String(filter.bucketMs));
-    }
-    const query = params.toString();
-    return request<Overview>(`/overview${query ? `?${query}` : ""}`);
-  },
+  usage: () => request<UsageSummary>("/usage"),
+  exportUsage: () => request<string>("/usage/export", { method: "POST" }),
   cursorHarness: () => request<CursorHarnessStatus>("/harness/cursor/status"),
   initializeCursorCa: () => request<CursorHarnessStatus>("/harness/cursor/ca/initialize", { method: "POST" }),
   openCursorCaInstallTerminal: async (command: string) => {
@@ -207,13 +132,6 @@ export const api = {
     await writeText(text);
   },
   setCursorEnabled: (enabled: boolean) => request<CursorHarnessStatus>("/harness/cursor/enabled", { method: "PUT", body: JSON.stringify({ enabled }) }),
-  calls: () => request<LlmCall[]>("/llm-calls?limit=200"),
-  call: (id: string) => request<CallDetail>(`/llm-calls/${encodeURIComponent(id)}`),
-  openCallDetails: async (id: string) => {
-    const url = new URL(window.location.href);
-    url.hash = `/calls/${encodeURIComponent(id)}`;
-    await request<void>("/desktop/open-external-url", { method: "POST", body: JSON.stringify({ url: url.toString() }) });
-  },
   openExternalUrl: (url: string) => request<void>("/desktop/open-external-url", { method: "POST", body: JSON.stringify({ url }) }),
   ports: () => request<PortSettings>("/settings/ports"),
   statisticsStorage: () => request<StatisticsStorage>("/settings/storage/statistics"),

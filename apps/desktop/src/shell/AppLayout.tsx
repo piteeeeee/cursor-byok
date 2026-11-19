@@ -10,7 +10,7 @@ import { ConfirmDialog } from "../shared/ui/ConfirmDialog";
 import controls from "../shared/ui/Controls.module.scss";
 import { Icon } from "../shared/ui/Icon";
 import { TooltipTrigger } from "../shared/ui/TooltipTrigger";
-import { flatColorAboutIcon, flatColorAreaChartIcon, flatColorSalesPerformanceIcon, flatColorSettingsIcon, refreshIcon } from "../shared/ui/icons";
+import { flatColorAboutIcon, flatColorAreaChartIcon, flatColorSettingsIcon, refreshIcon } from "../shared/ui/icons";
 import { useMessage } from "../shared/ui/message";
 import { VirtualList } from "../shared/virtual/VirtualList";
 import { appStore, useAppStore } from "../shared/store/appStore";
@@ -23,7 +23,7 @@ type MenuItem =
   | { kind: "external"; id: string; label: string; icon: IconifyIcon | string }
   | { kind: "group"; label: string };
 
-const keptAlivePages = ["/", "/calls", "/settings", "/harness/cursor"];
+const keptAlivePages = ["/", "/settings", "/harness/cursor"];
 const tutorialReadStorageKey = "cursor-byok:tutorial-read";
 const tutorialUrl = "https://docs.leokun.cn";
 
@@ -44,7 +44,6 @@ export function AppLayout() {
   });
   const menuItems: MenuItem[] = [
     { kind: "page", path: "/", label: t("数据概览"), icon: flatColorAreaChartIcon },
-    { kind: "page", path: "/calls", label: t("调用详细"), icon: flatColorSalesPerformanceIcon },
     { kind: "group", label: t("模型配置") },
     { kind: "page", path: "/harness/cursor", label: "Cursor", icon: cursorIconUrl },
     { kind: "group", label: t("设置") },

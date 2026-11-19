@@ -6,7 +6,7 @@ use crate::{
         checkpoint::PendingSteps, protocol::proto::agent::v1 as pb, transport::TransportHandle,
     },
     model::{CheckpointId, ToolRoundId},
-    store::Store,
+    store::MemoryStore,
     Error, Result,
 };
 
@@ -50,7 +50,7 @@ pub(crate) struct CheckpointWorker {
 
 impl CheckpointWorker {
     pub fn spawn(
-        store: Store,
+        store: MemoryStore,
         mut builder: CheckpointBuilder,
         handle: TransportHandle,
         mode: i32,
@@ -145,7 +145,7 @@ impl CheckpointWorker {
 }
 
 async fn publish_settled(
-    store: &Store,
+    store: &MemoryStore,
     builder: &mut CheckpointBuilder,
     handle: &TransportHandle,
     mode: i32,
@@ -158,7 +158,7 @@ async fn publish_settled(
 }
 
 async fn publish_started(
-    store: &Store,
+    store: &MemoryStore,
     builder: &mut CheckpointBuilder,
     handle: &TransportHandle,
     mode: i32,
@@ -185,7 +185,7 @@ async fn publish_started(
 }
 
 async fn build_final(
-    store: &Store,
+    store: &MemoryStore,
     builder: &mut CheckpointBuilder,
     mode: i32,
     checkpoint_id: CheckpointId,

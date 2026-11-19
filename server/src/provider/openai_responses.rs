@@ -16,8 +16,8 @@ use crate::{
 use super::{
     apply_body_allowlist, apply_openai_prompt_cache_key,
     attempt::{send_once, Attempt},
-    map_sse_error, merge_extra_params, provider_event_error, CallRecorder, FinishReason,
-    ModelEvent, Provider, ProviderStream,
+    map_sse_error, merge_extra_params, provider_event_error, FinishReason, ModelEvent, Provider,
+    ProviderStream,
 };
 
 #[derive(Default)]
@@ -39,21 +39,11 @@ enum ResponseToolArguments<'a> {
 pub struct OpenAiResponsesProvider {
     client: reqwest::Client,
     config: ProviderConfig,
-    recorder: Option<CallRecorder>,
 }
 
 impl OpenAiResponsesProvider {
     pub fn new(client: reqwest::Client, config: ProviderConfig) -> Self {
-        Self {
-            client,
-            config,
-            recorder: None,
-        }
-    }
-
-    pub fn with_recorder(mut self, recorder: Option<CallRecorder>) -> Self {
-        self.recorder = recorder;
-        self
+        Self { client, config }
     }
 }
 
@@ -65,7 +55,6 @@ impl Provider for OpenAiResponsesProvider {
     ) -> ProviderStream {
         let client = self.client.clone();
         let config = self.config.clone();
-        let recorder = self.recorder.clone();
         Box::pin(try_stream! {
             let ModelInvocation { call_id, request, .. } = invocation;
             let input = responses_input(&request.history)?;
@@ -84,29 +73,15 @@ impl Provider for OpenAiResponsesProvider {
             merge_extra_params(&mut body, &request.model.extra_params)?;
             apply_openai_prompt_cache_key(&mut body, &request.model.model_id)?;
             apply_body_allowlist(&mut body, config.allowed_body_fields.as_ref())?;
-            if let Some(recorder) = &recorder {
-                recorder.request(&body).await?;
-            }
             let attempt = send_once(
                 "OpenAI Responses",
                 || client.post(&config.request_url)
                     .bearer_auth(&config.api_key).headers(config.custom_headers.clone()).json(&body),
                 &cancellation,
-                recorder.as_ref(),
             ).await?;
             let Attempt::Response(response) = attempt else { return };
             yield ModelEvent::Start { model_call_id: call_id };
-            let chunk_recorder = recorder.clone();
-            let chunks = response.bytes_stream()
-                .map(|chunk| chunk.map_err(Error::from))
-                .then(move |chunk| {
-                    let recorder = chunk_recorder.clone();
-                    async move {
-                        let chunk = chunk?;
-                        if let Some(recorder) = recorder { recorder.response_chunk(&chunk).await?; }
-                        Ok::<_, Error>(chunk)
-                    }
-                });
+            let chunks = response.bytes_stream().map(|chunk| chunk.map_err(Error::from));
             let source = chunks.eventsource();
             futures_util::pin_mut!(source);
             let mut text_open = false;

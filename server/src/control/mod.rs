@@ -1,8 +1,8 @@
 //! Exposes the local control API.
-mod calls;
 mod harness;
 mod models;
-mod overview;
+mod preferences;
+
 mod service;
 mod settings;
 
@@ -19,7 +19,7 @@ use tower_http::{
 };
 use url::{Host, Url};
 
-pub use service::{CallDetail, CallSummary, ControlService, ModelConnectivityResult};
+pub use service::{ControlService, ModelConnectivityResult};
 
 pub fn web_router(service: ControlService, assets: impl AsRef<std::path::Path>) -> Router {
     Router::new()
@@ -111,9 +111,8 @@ pub fn api_router(service: ControlService) -> Router {
             "/__byok-api__/api/models/{model_hash}/test/{test_id}",
             post(models::test).delete(models::cancel),
         )
-        .route("/__byok-api__/api/overview", get(overview::get))
-        .route("/__byok-api__/api/llm-calls", get(calls::list))
-        .route("/__byok-api__/api/llm-calls/{call_id}", get(calls::detail))
+        .route("/__byok-api__/api/usage", get(|State(s): State<ControlService>| async move { s.summary().await.map(axum::Json) }))
+        .route("/__byok-api__/api/usage/export", post(|State(s): State<ControlService>| async move { s.export_csv().await.map(axum::Json) }))
         .route("/__byok-api__/api/settings/ports", get(settings::get_ports))
         .route(
             "/__byok-api__/api/settings/storage/statistics",

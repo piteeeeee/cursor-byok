@@ -231,7 +231,7 @@ pub fn run() -> ExitCode {
             let address = listener.local_addr()?;
             tauri::async_runtime::block_on(server.harness().cleanup_stale_settings())?;
             let desktop_settings =
-                tauri::async_runtime::block_on(server.store().desktop_settings())
+                tauri::async_runtime::block_on(server.control().desktop_settings())
                     .unwrap_or_default();
             #[cfg(target_os = "macos")]
             app.handle()

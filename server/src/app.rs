@@ -15,7 +15,7 @@ use crate::{
     local_app::CursorHarness,
     provider::ProviderRouter,
     search::WebCache,
-    store::Store,
+    store::{MemoryStore, UsageStore},
     Result,
 };
 
@@ -24,17 +24,23 @@ pub struct App {
     router: axum::Router,
     registry: TransportRegistry,
     harness: CursorHarness,
-    store: Store,
+    control: control::ControlService,
 }
 
 impl App {
     pub async fn new(settings: Settings) -> Result<Self> {
-        let store = Store::connect(&settings.database_url).await?;
+        let store = MemoryStore::default();
+        let usage = UsageStore::open(
+            &settings.paths.app_dir.join("usage.db"),
+            settings.config.retention_days,
+            settings.config.max_rows,
+        )
+        .await?;
         let assets = PromptAssets::embedded()?;
         let compiler = PromptCompiler::new(assets);
         let clients = crate::network::NetworkClients::new(settings.config.outbound_proxy.clone());
         let provider = std::sync::Arc::new(ProviderRouter::new(
-            store.clone(),
+            usage.clone(),
             settings.config.models.clone(),
             clients.clone(),
             settings.config.request_timeout,
@@ -50,10 +56,10 @@ impl App {
             ),
             provider.clone(),
             compiler,
-            WebCache::managed()?,
+            WebCache::at(settings.paths.app_dir.join("cache/web"))?,
         );
         let control = control::ControlService::new(
-            store.clone(),
+            usage,
             provider,
             clients.clone(),
             settings.config.clone(),
@@ -74,7 +80,7 @@ impl App {
             router,
             registry,
             harness,
-            store,
+            control,
             settings,
         })
     }
@@ -92,8 +98,8 @@ impl App {
         self.harness.clone()
     }
 
-    pub fn store(&self) -> Store {
-        self.store.clone()
+    pub fn control(&self) -> &control::ControlService {
+        &self.control
     }
 
     pub async fn serve(self) -> Result<()> {

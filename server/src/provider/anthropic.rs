@@ -13,8 +13,8 @@ use crate::{
 
 use super::{
     attempt::{send_once, Attempt},
-    map_sse_error, merge_extra_params, provider_event_error, CallRecorder, FinishReason,
-    ModelEvent, Provider, ProviderStream,
+    map_sse_error, merge_extra_params, provider_event_error, FinishReason, ModelEvent, Provider,
+    ProviderStream,
 };
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 65_000;
@@ -22,21 +22,11 @@ const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 65_000;
 pub struct AnthropicProvider {
     client: reqwest::Client,
     config: ProviderConfig,
-    recorder: Option<CallRecorder>,
 }
 
 impl AnthropicProvider {
     pub fn new(client: reqwest::Client, config: ProviderConfig) -> Self {
-        Self {
-            client,
-            config,
-            recorder: None,
-        }
-    }
-
-    pub fn with_recorder(mut self, recorder: Option<CallRecorder>) -> Self {
-        self.recorder = recorder;
-        self
+        Self { client, config }
     }
 }
 
@@ -48,7 +38,6 @@ impl Provider for AnthropicProvider {
     ) -> ProviderStream {
         let client = self.client.clone();
         let config = self.config.clone();
-        let recorder = self.recorder.clone();
         Box::pin(try_stream! {
             let ModelInvocation { call_id, request, .. } = invocation;
             let mut messages = anthropic_messages(&request.history)?;
@@ -82,9 +71,6 @@ impl Provider for AnthropicProvider {
             }
             apply_model(&mut body, &request.model)?;
             merge_extra_params(&mut body, &request.model.extra_params)?;
-            if let Some(recorder) = &recorder {
-                recorder.request(&body).await?;
-            }
             let attempt = send_once(
                 "Anthropic",
                 || client.post(&config.request_url)
@@ -92,21 +78,10 @@ impl Provider for AnthropicProvider {
                     .headers(config.custom_headers.clone())
                     .json(&body),
                 &cancellation,
-                recorder.as_ref(),
             ).await?;
             let Attempt::Response(response) = attempt else { return };
             yield ModelEvent::Start { model_call_id: call_id };
-            let chunk_recorder = recorder.clone();
-            let chunks = response.bytes_stream()
-                .map(|chunk| chunk.map_err(Error::from))
-                .then(move |chunk| {
-                    let recorder = chunk_recorder.clone();
-                    async move {
-                        let chunk = chunk?;
-                        if let Some(recorder) = recorder { recorder.response_chunk(&chunk).await?; }
-                        Ok::<_, Error>(chunk)
-                    }
-                });
+            let chunks = response.bytes_stream().map(|chunk| chunk.map_err(Error::from));
             let source = chunks.eventsource();
             futures_util::pin_mut!(source);
             let mut block_types = std::collections::BTreeMap::<usize, String>::new();

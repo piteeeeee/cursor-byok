@@ -4,8 +4,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Error, Result};
 
-use super::CallRecorder;
-
 #[derive(Debug)]
 pub(crate) enum Attempt {
     Response(reqwest::Response),
@@ -16,7 +14,6 @@ pub(crate) async fn send_once<F>(
     label: &str,
     build: F,
     cancellation: &CancellationToken,
-    recorder: Option<&CallRecorder>,
 ) -> Result<Attempt>
 where
     F: FnOnce() -> reqwest::RequestBuilder,
@@ -25,11 +22,6 @@ where
         _ = cancellation.cancelled() => return Ok(Attempt::Cancelled),
         response = build().send() => response,
     }?;
-    if let Some(recorder) = recorder {
-        recorder
-            .response_headers(response.status().as_u16())
-            .await?;
-    }
     if response.status().is_success() {
         return Ok(Attempt::Response(response));
     }
@@ -66,7 +58,7 @@ mod tests {
         let url =
             server(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 4\r\n\r\ndown").await;
         let client = reqwest::Client::new();
-        let error = send_once("test", || client.get(&url), &CancellationToken::new(), None)
+        let error = send_once("test", || client.get(&url), &CancellationToken::new())
             .await
             .unwrap_err();
         assert!(
@@ -79,7 +71,7 @@ mod tests {
         let url =
             server(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 100\r\n\r\nshort").await;
         let client = reqwest::Client::new();
-        let error = send_once("test", || client.get(&url), &CancellationToken::new(), None)
+        let error = send_once("test", || client.get(&url), &CancellationToken::new())
             .await
             .unwrap_err();
         assert!(matches!(error, Error::Http(_)));
@@ -92,7 +84,7 @@ mod tests {
         drop(listener);
         let url = format!("http://{address}");
         let client = reqwest::Client::new();
-        let error = send_once("test", || client.get(&url), &CancellationToken::new(), None)
+        let error = send_once("test", || client.get(&url), &CancellationToken::new())
             .await
             .unwrap_err();
         assert!(matches!(error, Error::Http(_)));

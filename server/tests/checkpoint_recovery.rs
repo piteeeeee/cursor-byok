@@ -14,203 +14,9 @@ use cursor_server::{
     },
     model::ToolRoundId,
     provider::{FinishReason, ModelEvent},
-    store::{BlobEdge, BlobId},
+    store::BlobId,
 };
 use prost::Message;
-
-#[tokio::test]
-async fn v0_1_5_beta_1_schema_upgrades_to_checkpoints_without_losing_rows() {
-    use std::borrow::Cow;
-
-    use sqlx::{
-        migrate::Migrator,
-        sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    };
-
-    static ALL_MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
-
-    let directory = tempfile::tempdir().unwrap();
-    let database_path = directory.path().join("upgrade.db");
-    let database_url = format!("sqlite://{}", database_path.display());
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(&database_path)
-                .create_if_missing(true)
-                .foreign_keys(true),
-        )
-        .await
-        .unwrap();
-    // v0.1.5-beta.1 shipped migrations 0001 through 0004.
-    let v0_1_5_beta_1 = Migrator {
-        migrations: Cow::Owned(ALL_MIGRATIONS.iter().take(4).cloned().collect()),
-        ..Migrator::DEFAULT
-    };
-    v0_1_5_beta_1.run(&pool).await.unwrap();
-
-    sqlx::query(
-        "INSERT INTO conversations(conversation_id, updated_at_ms)
-         VALUES ('upgrade-conversation', 1)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO conversation_revisions(
-            conversation_id, parent_revision_id, state_digest, created_at_ms
-         ) VALUES ('upgrade-conversation', NULL, zeroblob(32), 2)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let revision_id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "UPDATE conversations SET current_revision_id = ? WHERE conversation_id = 'upgrade-conversation'",
-    )
-    .bind(revision_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO messages(
-            conversation_id, message_id, role, origin, payload_json, created_at_ms
-         ) VALUES ('upgrade-conversation', 'message-1', 'user', 'user', '{}', 3)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO revision_messages(revision_id, ordinal, conversation_id, message_id)
-         VALUES (?, 0, 'upgrade-conversation', 'message-1')",
-    )
-    .bind(revision_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO runs(
-            run_id, conversation_id, base_revision_id, head_revision_id, run_kind, status,
-            created_at_ms, updated_at_ms
-         ) VALUES ('upgrade-run', 'upgrade-conversation', ?, ?, 'root', 'completed', 4, 4)",
-    )
-    .bind(revision_id)
-    .bind(revision_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO tool_rounds(
-            round_id, run_id, base_revision_id, assistant_json, status, created_at_ms, updated_at_ms
-         ) VALUES ('upgrade-round', 'upgrade-run', ?, '{}', 'settled', 5, 5)",
-    )
-    .bind(revision_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO tool_round_calls(
-            round_id, call_index, call_id, model_call_id, name, arguments_json, status,
-            committed_revision_id
-         ) VALUES ('upgrade-round', 0, 'upgrade-call', 'model-call', 'Read', '{}', 'completed', ?)",
-    )
-    .bind(revision_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO input_anchors(conversation_id, input_id, base_revision_id, created_at_ms)
-         VALUES ('upgrade-conversation', 'input-1', ?, 6)",
-    )
-    .bind(revision_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    pool.close().await;
-
-    let upgraded = cursor_server::store::Store::connect(&database_url)
-        .await
-        .unwrap();
-    let current: i64 = sqlx::query_scalar(
-        "SELECT current_checkpoint_id FROM conversations
-         WHERE conversation_id = 'upgrade-conversation'",
-    )
-    .fetch_one(upgraded.pool())
-    .await
-    .unwrap();
-    let linked_messages: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM checkpoint_messages WHERE checkpoint_id = ?")
-            .bind(revision_id)
-            .fetch_one(upgraded.pool())
-            .await
-            .unwrap();
-    let run_checkpoints: (i64, i64) = sqlx::query_as(
-        "SELECT base_checkpoint_id, head_checkpoint_id FROM runs WHERE run_id = 'upgrade-run'",
-    )
-    .fetch_one(upgraded.pool())
-    .await
-    .unwrap();
-    let round_checkpoint: i64 = sqlx::query_scalar(
-        "SELECT base_checkpoint_id FROM tool_rounds WHERE round_id = 'upgrade-round'",
-    )
-    .fetch_one(upgraded.pool())
-    .await
-    .unwrap();
-    let committed_checkpoint: i64 = sqlx::query_scalar(
-        "SELECT committed_checkpoint_id FROM tool_round_calls WHERE call_id = 'upgrade-call'",
-    )
-    .fetch_one(upgraded.pool())
-    .await
-    .unwrap();
-    let anchor_checkpoint: i64 = sqlx::query_scalar(
-        "SELECT base_checkpoint_id FROM input_anchors WHERE input_id = 'input-1'",
-    )
-    .fetch_one(upgraded.pool())
-    .await
-    .unwrap();
-
-    assert_eq!(current, revision_id);
-    assert_eq!(linked_messages, 1);
-    assert_eq!(run_checkpoints, (revision_id, revision_id));
-    assert_eq!(round_checkpoint, revision_id);
-    assert_eq!(committed_checkpoint, revision_id);
-    assert_eq!(anchor_checkpoint, revision_id);
-}
-
-#[tokio::test]
-async fn checkpoint_dependencies_are_content_addressed_without_a_persistent_stream_outbox() {
-    let (_directory, store) = fixtures::temp_store().await;
-    let child = store.put_blob(b"message", &[]).await.unwrap();
-    let root = store
-        .put_blob(
-            b"checkpoint",
-            &[BlobEdge {
-                child: child.clone(),
-                field_name: "turns[0]".into(),
-            }],
-        )
-        .await
-        .unwrap();
-    assert_eq!(root, BlobId::digest(b"checkpoint"));
-    assert_eq!(store.get_blob(&child).await.unwrap().unwrap(), b"message");
-    let closure = store
-        .blob_closure(std::slice::from_ref(&root))
-        .await
-        .unwrap();
-    assert!(closure.contains(&root));
-    assert!(closure.contains(&child));
-
-    let outbox: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'outbox'",
-    )
-    .fetch_one(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(outbox, 0);
-}
 
 #[tokio::test]
 async fn eligible_pending_checkpoint_resumes_tools_before_the_next_model_call() {
@@ -424,8 +230,6 @@ async fn eligible_pending_checkpoint_resumes_tools_before_the_next_model_call() 
         let turn = pb::ConversationTurnStructure::decode(
             store
                 .get_blob(&BlobId::from_bytes(turn_id).unwrap())
-                .await
-                .unwrap()
                 .unwrap()
                 .as_slice(),
         )
@@ -445,8 +249,6 @@ async fn eligible_pending_checkpoint_resumes_tools_before_the_next_model_call() 
             let step = pb::ConversationStep::decode(
                 store
                     .get_blob(&BlobId::from_bytes(step_id).unwrap())
-                    .await
-                    .unwrap()
                     .unwrap()
                     .as_slice(),
             )
@@ -571,6 +373,162 @@ fn start_request() -> pb::AgentClientMessage {
                 ..Default::default()
             },
         )),
+    }
+}
+
+#[tokio::test]
+async fn cold_restart_recovers_completed_tool_history_and_rebuilds_usage_anchor() {
+    use cursor_server::{model::Usage, store::MemoryStore};
+    use std::collections::HashMap;
+    let provider = fake_provider::FakeProvider::default();
+    let usage = ModelEvent::Usage(Usage {
+        context_input_tokens: Some(73),
+        ..Default::default()
+    });
+    provider.push(vec![
+        ModelEvent::Start {
+            model_call_id: "tool-call".into(),
+        },
+        ModelEvent::ToolCallStart {
+            index: 0,
+            call_id: "read-1".into(),
+            name: "Read".into(),
+        },
+        ModelEvent::ToolCallArgumentsDelta {
+            index: 0,
+            delta: r#"{"path":"/tmp/a"}"#.into(),
+        },
+        ModelEvent::ToolCallEnd { index: 0 },
+        ModelEvent::Done(FinishReason::ToolUse),
+    ]);
+    for text in ["prior reply", "continued", "anchored"] {
+        provider.push(vec![
+            ModelEvent::Start {
+                model_call_id: text.into(),
+            },
+            ModelEvent::TextStart,
+            ModelEvent::TextDelta(text.into()),
+            ModelEvent::TextEnd,
+            usage.clone(),
+            ModelEvent::Done(FinishReason::Stop),
+        ]);
+    }
+    let mut blobs = HashMap::new();
+    let mut state = None;
+    let mut gets = 0;
+    let mut store = MemoryStore::default();
+    for turn in 0..3 {
+        if turn == 1 {
+            store = MemoryStore::default();
+        }
+        assert_eq!(
+            store.latest_context_usage(&"conversation".into()).is_some(),
+            turn == 2
+        );
+        let registry = TransportRegistry::new(
+            store.clone(),
+            fixtures::empty_runtime(),
+            Arc::new(provider.clone()),
+            PromptCompiler::new(PromptAssets::embedded().unwrap()),
+        );
+        let handle = registry
+            .get_or_create(&format!("cold-{turn}"))
+            .await
+            .unwrap();
+        let mut stream = handle.subscribe();
+        let mut request = start_request();
+        let Some(pb::agent_client_message::Message::RunRequest(ref mut req)) = request.message
+        else {
+            unreachable!()
+        };
+        req.conversation_state = state.take();
+        let Some(pb::conversation_action::Action::UserMessageAction(action)) =
+            req.action.as_mut().unwrap().action.as_mut()
+        else {
+            unreachable!()
+        };
+        let user = action.user_message.as_mut().unwrap();
+        user.message_id = format!("user-{turn}");
+        user.text = format!("question-{turn}");
+        handle
+            .command(TransportCommand::Append {
+                seqno: 0,
+                message: Box::new(request),
+            })
+            .await
+            .unwrap();
+        let mut seq = 1;
+        loop {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let (flags, payload) = connect::decode_frames(&frame).unwrap().pop().unwrap();
+            if flags & connect::END_STREAM_FLAG != 0 {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&payload).unwrap(),
+                    serde_json::json!({})
+                );
+                break;
+            }
+            let server = pb::AgentServerMessage::decode(payload).unwrap();
+            let reply = match server.message {
+                Some(pb::agent_server_message::Message::KvServerMessage(kv)) => {
+                    let msg = match kv.message.unwrap() {
+                        pb::kv_server_message::Message::SetBlobArgs(a) => {
+                            blobs.insert(a.blob_id, a.blob_data);
+                            pb::kv_client_message::Message::SetBlobResult(pb::SetBlobResult {
+                                error: None,
+                            })
+                        }
+                        pb::kv_server_message::Message::GetBlobArgs(a) => {
+                            gets += 1;
+                            pb::kv_client_message::Message::GetBlobResult(pb::GetBlobResult {
+                                blob_data: Some(blobs[&a.blob_id].clone()),
+                                error: None,
+                            })
+                        }
+                    };
+                    pb::AgentClientMessage {
+                        message: Some(pb::agent_client_message::Message::KvClientMessage(
+                            pb::KvClientMessage {
+                                id: kv.id,
+                                message: Some(msg),
+                            },
+                        )),
+                    }
+                }
+                Some(pb::agent_server_message::Message::ExecServerMessage(e)) => read_result(e.id),
+                Some(pb::agent_server_message::Message::ConversationCheckpointUpdate(cp)) => {
+                    state = Some(cp);
+                    continue;
+                }
+                _ => continue,
+            };
+            handle
+                .command(TransportCommand::Append {
+                    seqno: seq,
+                    message: Box::new(reply),
+                })
+                .await
+                .unwrap();
+            seq += 1;
+        }
+        assert!(state.is_some());
+        assert_eq!(
+            store
+                .latest_context_usage(&"conversation".into())
+                .unwrap()
+                .context_input_tokens,
+            73
+        );
+        registry.shutdown().await;
+    }
+    assert!(gets > 0);
+    let requests = provider.requests();
+    let recovered = serde_json::to_string(&requests[2].history).unwrap();
+    for token in ["question-0", "read-1", "value", "prior reply", "question-1"] {
+        assert!(recovered.contains(token), "missing {token}");
     }
 }
 

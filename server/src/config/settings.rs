@@ -35,7 +35,6 @@ pub struct Settings {
     pub config: Config,
     pub paths: Paths,
     pub listen_addr: SocketAddr,
-    pub database_url: String,
     pub console: Option<ConsoleSource>,
 }
 
@@ -50,23 +49,13 @@ impl Settings {
     /// Binds a parsed configuration to its listen address and database URL.
     pub fn from_config(config: Config, paths: Paths) -> Result<Self> {
         let listen_addr = SocketAddr::from(([127, 0, 0, 1], config.listen_port));
-        let database_url = database_url(&paths)?;
         Ok(Self {
             config,
             paths,
             listen_addr,
-            database_url,
             console: console_from_env()?,
         })
     }
-}
-
-fn database_url(paths: &Paths) -> Result<String> {
-    paths
-        .previous_database
-        .to_str()
-        .map(|path| format!("sqlite://{path}"))
-        .ok_or_else(|| Error::Config("database path is not valid UTF-8".into()))
 }
 
 fn console_from_env() -> Result<Option<ConsoleSource>> {
@@ -86,19 +75,5 @@ fn console_from_env() -> Result<Option<ConsoleSource>> {
         (Some(directory), None) => Ok(Some(ConsoleSource::Directory(directory))),
         (None, Some(proxy)) => Ok(Some(ConsoleSource::Proxy(proxy))),
         (None, None) => Ok(None),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn database_url_points_at_the_previous_database() {
-        let paths = Paths::at(std::path::Path::new("/home/tester"));
-        assert_eq!(
-            database_url(&paths).unwrap(),
-            "sqlite:///home/tester/.cursor-byok-v3/cursor-byok.db"
-        );
     }
 }

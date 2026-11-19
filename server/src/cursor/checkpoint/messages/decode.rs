@@ -237,11 +237,20 @@ fn decode_tool_result(value: &Value) -> Result<ToolResultContent> {
     Ok(ToolResultContent {
         call_id: required_string(part, "toolCallId")?.into(),
         name: required_string(part, "toolName")?.into(),
-        content: part
-            .get("result")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .into(),
+        content: {
+            let text = part
+                .get("result")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if part.get("toolName").and_then(Value::as_str) == Some("Read")
+                && text.starts_with("Read image file: ")
+                && !text.ends_with("[图片在助手重启后不可用]")
+            {
+                format!("{text}\n[图片在助手重启后不可用]")
+            } else {
+                text.into()
+            }
+        },
         is_error: part
             .get("isError")
             .and_then(Value::as_bool)

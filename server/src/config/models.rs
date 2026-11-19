@@ -7,6 +7,7 @@ use crate::{model::ModelConfig, Error, Result};
 #[derive(Clone, Debug, Default)]
 pub struct Models {
     ordered: Vec<ModelConfig>,
+    provider_names: Vec<String>,
     hashes: HashSet<String>,
 }
 
@@ -26,10 +27,22 @@ impl Models {
         }
         Ok(Self {
             ordered: models,
+            provider_names: vec![],
             hashes,
         })
     }
 
+    pub(crate) fn set_provider_names(&mut self, names: Vec<String>) {
+        self.provider_names = names;
+    }
+    pub(crate) fn provider_name(&self, hash: &str) -> &str {
+        self.ordered
+            .iter()
+            .position(|m| m.model_hash == hash)
+            .and_then(|i| self.provider_names.get(i))
+            .map(String::as_str)
+            .unwrap_or_default()
+    }
     pub fn all(&self) -> &[ModelConfig] {
         &self.ordered
     }

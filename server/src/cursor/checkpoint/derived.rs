@@ -96,7 +96,7 @@ impl CheckpointBuilder {
             if self.base.todos.get(index).map(|raw| raw.as_slice()) == Some(id.as_bytes()) {
                 todo_ids.push(id);
             } else {
-                todo_ids.push(self.sync.persist(&encoded, &[]).await?);
+                todo_ids.push(self.sync.persist(&encoded).await?);
             }
         }
         let plan_id = if let Some(value) = state.plan {
@@ -112,7 +112,7 @@ impl CheckpointBuilder {
             if self.base.plan.as_deref() == Some(id.as_bytes()) {
                 Some(id)
             } else {
-                Some(self.sync.persist(&encoded, &[]).await?)
+                Some(self.sync.persist(&encoded).await?)
             }
         } else {
             None

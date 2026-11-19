@@ -59,7 +59,7 @@ impl Default for ServerSection {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StatsSection {
-    #[serde(default)]
+    #[serde(default = "default_retention_days")]
     retention_days: u32,
     #[serde(default = "default_stats_max_rows")]
     max_rows: u32,
@@ -68,7 +68,7 @@ struct StatsSection {
 impl Default for StatsSection {
     fn default() -> Self {
         Self {
-            retention_days: 0,
+            retention_days: default_retention_days(),
             max_rows: default_stats_max_rows(),
         }
     }
@@ -143,9 +143,15 @@ fn default_stats_max_rows() -> u32 {
     100_000
 }
 
+fn default_retention_days() -> u32 {
+    90
+}
+
 /// Parsed configuration, shared by the server for its whole lifetime.
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub retention_days: u32,
+    pub max_rows: u32,
     pub default_model: String,
     pub listen_port: u16,
     pub proxy_port: u16,
@@ -183,7 +189,8 @@ impl Config {
                 "config.toml must define at least one [[models]] entry".into(),
             ));
         }
-        let models = Models::new(models)?;
+        let mut models = Models::new(models)?;
+        models.set_provider_names(file.models.iter().map(|m| m.provider.clone()).collect());
         models.resolve_default(&file.default_model)?;
         if file.server.listen_port == file.server.proxy_port {
             return Err(Error::Config(
@@ -198,6 +205,8 @@ impl Config {
         }
         Ok(Self {
             default_model: file.default_model,
+            retention_days: stats.retention_days,
+            max_rows: stats.max_rows,
             listen_port: file.server.listen_port,
             proxy_port: file.server.proxy_port,
             request_timeout: Duration::from_secs(file.server.request_timeout_secs),
@@ -433,6 +442,7 @@ endpoint = "/v1/responses"
     fn parses_the_documented_configuration() {
         let config = Config::parse(EXAMPLE, &resolve).unwrap();
         assert_eq!(config.default_model, "deepseek-v4.1-flash");
+        assert_eq!((config.retention_days, config.max_rows), (30, 1000));
         assert_eq!(config.listen_port, 51_867);
         assert_eq!(config.proxy_port, 52_149);
         assert_eq!(config.request_timeout, Duration::from_secs(120));

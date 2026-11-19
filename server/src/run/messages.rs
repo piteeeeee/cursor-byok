@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     model::{CanonicalMessage, CheckpointId, PreparedRun},
-    store::Store,
+    store::MemoryStore,
 };
 
 use super::{
@@ -14,7 +14,7 @@ use super::{
 };
 
 pub(super) async fn append_batches(
-    store: &Store,
+    store: &MemoryStore,
     prepared: &PreparedRun,
     client: &mut RunPort,
     cancellation: &CancellationToken,
@@ -58,7 +58,7 @@ pub(super) fn drain_accepted(client: &mut RunPort) -> Result<Vec<MessageBatch>, 
 }
 
 async fn append_one(
-    store: &Store,
+    store: &MemoryStore,
     prepared: &PreparedRun,
     client: &mut RunPort,
     cancellation: &CancellationToken,

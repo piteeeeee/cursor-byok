@@ -5,8 +5,6 @@ import { MessageProvider } from "./shared/ui/MessageProvider";
 import { useMessage } from "./shared/ui/message";
 import { AppFrame } from "./shell/AppFrame";
 import { AppLayout } from "./shell/AppLayout";
-import { CallsPage } from "./features/calls/CallsPage";
-import { CallDetailsPage } from "./features/calls/CallDetailsPage";
 import { CursorSettingsPage } from "./features/models/CursorSettingsPage";
 import { HomePage } from "./features/home/HomePage";
 import { SettingsPage } from "./features/settings/SettingsPage";
@@ -20,11 +18,9 @@ export function App() {
     <TooltipProvider>
       <HashRouter>
         <Routes>
-          <Route path="calls/:callId" element={<CallDetailsPage />} />
           <Route element={<AppFrame />}>
             <Route element={<AppLayout />}>
               <Route index element={<HomePage />} />
-              <Route path="calls" element={<CallsPage />} />
               <Route path="harness/cursor" element={<CursorSettingsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>

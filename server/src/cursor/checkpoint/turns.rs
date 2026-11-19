@@ -3,7 +3,7 @@ use prost::Message;
 
 use crate::{
     cursor::{checkpoint::PendingSteps, protocol::proto::agent::v1 as pb},
-    store::{BlobEdge, BlobId},
+    store::BlobId,
     Error, Result,
 };
 
@@ -35,7 +35,7 @@ impl CheckpointBuilder {
         for step in &presentation.steps {
             let mut encoded = Vec::new();
             step.encode(&mut encoded)?;
-            let id = self.sync.persist(&encoded, &[]).await?;
+            let id = self.sync.persist(&encoded).await?;
             turn.current.steps.push(id.as_bytes().to_vec());
         }
         if changed || turn.current_id.is_none() {
@@ -48,18 +48,7 @@ impl CheckpointBuilder {
             };
             let mut encoded = Vec::new();
             wrapper.encode(&mut encoded)?;
-            let mut edges = Vec::with_capacity(turn.current.steps.len() + 1);
-            edges.push(BlobEdge {
-                child: BlobId::from_bytes(&turn.current.user_message)?,
-                field_name: "agent_conversation_turn.user_message".into(),
-            });
-            for (index, raw_id) in turn.current.steps.iter().enumerate() {
-                edges.push(BlobEdge {
-                    child: BlobId::from_bytes(raw_id)?,
-                    field_name: format!("agent_conversation_turn.steps[{index}]"),
-                });
-            }
-            turn.current_id = Some(self.sync.persist(&encoded, &edges).await?);
+            turn.current_id = Some(self.sync.persist(&encoded).await?);
         }
         let mut ids = turn.preceding.clone();
         ids.push(
@@ -85,7 +74,7 @@ impl CheckpointBuilder {
             user.mode = mode;
             let mut encoded = Vec::new();
             user.encode(&mut encoded)?;
-            let user_id = self.sync.persist(&encoded, &[]).await?;
+            let user_id = self.sync.persist(&encoded).await?;
             self.turn = Some(TurnFrontier {
                 preceding: base_ids,
                 current_id: None,

@@ -1,4 +1,7 @@
 {
+  "28b9f1682516276b": "Tokens today",
+  "c6e49f2af9c2e549": "Tokens this month",
+  "e40a628ffec72072": "Export CSV",
   "00929f23850e4ff0": "Successful calls: {count}",
   "028a4de61bff743d": "Regular input: {tokens} × ${price}/1M = {cost}",
   "03ff62ab4b818492": "Cache write: {tokens} × ${price}/1M = {cost}",

@@ -1,4 +1,7 @@
 {
+  "28b9f1682516276b": "今日 Token",
+  "c6e49f2af9c2e549": "本月 Token",
+  "e40a628ffec72072": "导出 CSV",
   "00929f23850e4ff0": "成功调用：{count}",
   "028a4de61bff743d": "普通输入：{tokens} × ${price}/1M = {cost}",
   "03ff62ab4b818492": "缓存写入：{tokens} × ${price}/1M = {cost}",

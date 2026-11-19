@@ -195,13 +195,13 @@ async fn background_completion_joins_the_active_run_instead_of_replacing_it() {
     assert!(history.contains("child-1"));
     assert!(history.contains("first response"));
     assert!(history.contains("child-2"));
-    let statuses: Vec<String> = sqlx::query_scalar(
-        "SELECT status FROM runs WHERE conversation_id = 'parent-conversation' ORDER BY created_at_ms",
-    )
-    .fetch_all(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(statuses, ["completed"]);
+    assert!(store
+        .conversation(&"parent-conversation".into())
+        .await
+        .unwrap()
+        .unwrap()
+        .active_run_id
+        .is_none());
 }
 
 #[tokio::test]

@@ -30,7 +30,7 @@ use crate::{
     },
     model::{ConversationId, ToolCall, ToolRoundId, Usage},
     run::{CommandResult, CommitCause, RunEvent, RunFailure, RunHandle, RunOutcome, RunSession},
-    store::{Store, ToolRoundStatus},
+    store::{MemoryStore, ToolRoundStatus},
     Error, Result,
 };
 
@@ -39,7 +39,7 @@ use crate::cursor::transport::TransportHandle;
 
 pub struct ConversationOutput {
     handle: TransportHandle,
-    store: Store,
+    store: MemoryStore,
     context: CursorRunContext,
     core: RunSession,
     run: RunHandle,
@@ -83,7 +83,7 @@ pub(crate) struct ConversationOutputDependencies {
 impl ConversationOutput {
     pub(crate) fn new(
         handle: TransportHandle,
-        store: Store,
+        store: MemoryStore,
         context: CursorRunContext,
         core: RunSession,
         run: RunHandle,
@@ -799,7 +799,7 @@ impl ConversationOutput {
             return Ok(None);
         }
         if let Some(image) = completion.take_read_image() {
-            let blob_id = self.store.put_blob(&image.data, &[]).await?;
+            let blob_id = self.store.put_blob(&image.data);
             completion.persist_read_image(&blob_id, &image)?;
         }
         let result = completion.result();
@@ -1000,7 +1000,7 @@ fn cursor_error(failure: RunFailure) -> Error {
     match failure {
         RunFailure::Protocol(message) => Error::Protocol(message),
         RunFailure::Provider(message) => Error::Provider(message),
-        RunFailure::Store(message) => Error::Store(message),
+        RunFailure::MemoryStore(message) => Error::Store(message),
         RunFailure::Client(message) => Error::Protocol(message),
     }
 }

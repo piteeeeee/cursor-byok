@@ -1,4 +1,7 @@
 {
+  "28b9f1682516276b": "Tokens de hoje",
+  "c6e49f2af9c2e549": "Tokens deste mês",
+  "e40a628ffec72072": "Exportar CSV",
   "00929f23850e4ff0": "Chamadas com sucesso: {count}",
   "028a4de61bff743d": "Entrada padrão: {tokens} × ${price}/1M = {cost}",
   "03ff62ab4b818492": "Gravação em cache: {tokens} × ${price}/1M = {cost}",

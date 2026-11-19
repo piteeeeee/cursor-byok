@@ -28,6 +28,13 @@ pub async fn hydrate(
         .and_then(|action| action.request_context_parts.as_ref())
     else {
         if is_background_completion(request) {
+            if let Some(previous) = request
+                .conversation_id
+                .as_deref()
+                .and_then(|id| context_sync.previous(id))
+            {
+                return Ok(previous);
+            }
             return context_sync
                 .load(request.conversation_id.as_deref().unwrap_or_default())
                 .await;

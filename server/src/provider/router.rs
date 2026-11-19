@@ -7,8 +7,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{ProviderConfig, ProviderKind},
-    model::{ModelInvocation, ModelLatency, NewLlmCall, ProviderType},
-    store::Store,
+    model::{ModelInvocation, ProviderType},
+    store::UsageStore,
     Error, Result,
 };
 
@@ -18,7 +18,7 @@ use super::{
 };
 
 pub struct ProviderRouter {
-    store: Store,
+    store: UsageStore,
     models: crate::config::Models,
     clients: crate::network::NetworkClients,
     request_timeout: Duration,
@@ -27,7 +27,7 @@ pub struct ProviderRouter {
 
 impl ProviderRouter {
     pub fn new(
-        store: Store,
+        store: UsageStore,
         models: crate::config::Models,
         clients: crate::network::NetworkClients,
         request_timeout: Duration,
@@ -66,7 +66,7 @@ impl Provider for ProviderRouter {
                 &invocation.conversation_id,
             );
             routed.request.model.model_id = model.model_id.clone();
-            let recorder = start_recorder(&store, &invocation, &model.model_hash, &model.display_name, provider_type, &request_url, &model.model_id).await?;
+            let recorder = CallRecorder::new(store.clone(), &model, models.provider_name(&model.model_hash));
             let _cancel_on_drop = recorder.cancel_on_drop();
             let config = ProviderConfig {
                 kind: provider_kind(provider_type),
@@ -82,7 +82,7 @@ impl Provider for ProviderRouter {
                 allowed_body_fields: None,
             };
             let client = clients.provider_client(request_timeout).await?;
-            let provider = build_observed(&config, recorder.clone(), client)?;
+            let provider = build_inner(&config, Some(client))?;
             let mut stream = provider.stream(routed, cancellation.clone());
 
             let stream_started = std::time::Instant::now();
@@ -167,40 +167,8 @@ fn event_name(event: &super::ModelEvent) -> &'static str {
     }
 }
 
-async fn start_recorder(
-    store: &Store,
-    invocation: &ModelInvocation,
-    model_hash: &str,
-    display_name: &str,
-    provider_type: ProviderType,
-    request_url: &str,
-    model_id: &str,
-) -> Result<CallRecorder> {
-    CallRecorder::start(
-        store.clone(),
-        NewLlmCall {
-            call_id: invocation.call_id.clone(),
-            run_id: invocation.run_id.clone(),
-            conversation_id: invocation.conversation_id.clone(),
-            provider_call_index: invocation.provider_call_index.min(i64::MAX as u64) as i64,
-            model_hash: model_hash.into(),
-            provider_type,
-            provider_url: request_url.into(),
-            request_type: provider_type,
-            request_url: request_url.into(),
-            model_id: model_id.into(),
-            display_name: display_name.into(),
-            reasoning_effort: invocation.request.model.reasoning.effort.clone(),
-            fast: invocation.request.model.latency == ModelLatency::Fast,
-            message_count: invocation.request.history.len(),
-            tool_count: invocation.request.prompt.tools.len(),
-        },
-    )
-    .await
-}
-
 async fn finish_stream(recorder: &CallRecorder, cancellation: &CancellationToken) -> Result<()> {
-    if recorder.is_finished() {
+    if recorder.is_finished().await {
         return Ok(());
     }
     if cancellation.is_cancelled() {
@@ -285,20 +253,11 @@ pub(crate) fn custom_headers(
 }
 
 pub fn build(config: &ProviderConfig) -> Result<Arc<dyn Provider>> {
-    build_inner(config, None, None)
-}
-
-fn build_observed(
-    config: &ProviderConfig,
-    recorder: CallRecorder,
-    client: reqwest::Client,
-) -> Result<Arc<dyn Provider>> {
-    build_inner(config, Some(recorder), Some(client))
+    build_inner(config, None)
 }
 
 fn build_inner(
     config: &ProviderConfig,
-    recorder: Option<CallRecorder>,
     client: Option<reqwest::Client>,
 ) -> Result<Arc<dyn Provider>> {
     let client = match client {
@@ -308,15 +267,11 @@ fn build_inner(
             .build()?,
     };
     let provider: Arc<dyn Provider> = match config.kind {
-        ProviderKind::OpenAiChat => {
-            Arc::new(OpenAiChatProvider::new(client, config.clone()).with_recorder(recorder))
-        }
+        ProviderKind::OpenAiChat => Arc::new(OpenAiChatProvider::new(client, config.clone())),
         ProviderKind::OpenAiResponses => {
-            Arc::new(OpenAiResponsesProvider::new(client, config.clone()).with_recorder(recorder))
+            Arc::new(OpenAiResponsesProvider::new(client, config.clone()))
         }
-        ProviderKind::Anthropic => {
-            Arc::new(AnthropicProvider::new(client, config.clone()).with_recorder(recorder))
-        }
+        ProviderKind::Anthropic => Arc::new(AnthropicProvider::new(client, config.clone())),
     };
     Ok(Arc::new(NormalizedProvider::new(provider)))
 }

@@ -10,7 +10,7 @@ use crate::{
         ToolRoundId, Usage,
     },
     provider::Provider,
-    store::{ContextUsageAnchor, RunStatus, Store},
+    store::{ContextUsageAnchor, MemoryStore, RunStatus},
 };
 
 use super::{
@@ -21,7 +21,7 @@ use super::{
 };
 
 pub struct RunEngine {
-    store: Store,
+    store: MemoryStore,
     provider: Arc<dyn Provider>,
 }
 
@@ -32,7 +32,7 @@ const CONTINUE_MESSAGE_ID: &str = "runtime:continue";
 const CONTINUE_INSTRUCTION: &str = "Continue from where you left off.";
 
 impl RunEngine {
-    pub fn new(store: Store, provider: Arc<dyn Provider>) -> Self {
+    pub fn new(store: MemoryStore, provider: Arc<dyn Provider>) -> Self {
         Self { store, provider }
     }
 
@@ -102,14 +102,7 @@ impl RunEngine {
         stages: &mut crate::timing::Stages,
     ) -> (RunOutcome, Option<Usage>) {
         let mut usage = None;
-        let mut context_usage_anchor = match self
-            .store
-            .latest_context_usage(prepared.conversation_id.as_str())
-            .await
-        {
-            Ok(anchor) => anchor,
-            Err(error) => return (RunOutcome::Failed(error.into()), usage),
-        };
+        let mut context_usage_anchor = self.store.latest_context_usage(&prepared.conversation_id);
         stages.mark("usage anchor");
         tracing::info!(
             checkpoint_id = checkpoint.0,
@@ -224,6 +217,8 @@ impl RunEngine {
                     Ok((next_checkpoint, compaction_usage)) => {
                         checkpoint = next_checkpoint;
                         context_usage_anchor = None;
+                        self.store
+                            .set_usage(&prepared.conversation_id, &prepared.run_id, None);
                         if let Some(compaction_usage) = compaction_usage {
                             accumulate_usage(&mut usage, compaction_usage);
                         }
@@ -291,95 +286,97 @@ impl RunEngine {
                 tokio::pin!(cycle);
                 let cycle = loop {
                     tokio::select! {
-                        biased;
-                        command = client.commands.recv() => {
-                            let interruption = match command {
-                                Some(RunCommand::InsertMessages(insertion)) => {
-                                    pending_insertions.push(insertion);
-                                    continue;
-                                }
-                                Some(RunCommand::BreakMessages(messages)) => messages,
-                                Some(RunCommand::Cancel) => {
-                                    cycle_cancellation.cancel();
-                                    let _ = cycle.await;
-                                    let _ = emit(client, RunEvent::CycleInterrupted).await;
-                                    return (RunOutcome::Cancelled, usage);
-                                }
-                                Some(RunCommand::ToolResult(_)) => {
-                                    cycle_cancellation.cancel();
-                                    let _ = cycle.await;
-                                    let _ = emit(client, RunEvent::CycleInterrupted).await;
-                                    return (
-                                        RunOutcome::Failed(RunFailure::Protocol(
-                                            "received a tool result while the model was running".into(),
-                                        )),
-                                        usage,
-                                    );
-                                }
-                                None => {
-                                    cycle_cancellation.cancel();
-                                    let _ = cycle.await;
-                                    let _ = emit(client, RunEvent::CycleInterrupted).await;
-                                    return (client_failure(), usage);
-                                }
-                            };
-                            cycle_cancellation.cancel();
-                            let interrupted = cycle.await;
-                            match interrupted {
-                                Ok(cycle) => {
-                                    if let Some(cycle_usage) = cycle.usage {
-                                        update_context_usage_anchor(
-                                            &mut context_usage_anchor,
-                                            cycle_usage,
-                                            anchored_messages,
-                                        );
-                                        accumulate_usage(&mut usage, cycle_usage);
-                                    }
-                                }
-                                Err(failure) => {
-                                    if let Some(cycle_usage) = failure.usage {
-                                        update_context_usage_anchor(
-                                            &mut context_usage_anchor,
-                                            cycle_usage,
-                                            anchored_messages,
-                                        );
-                                        accumulate_usage(&mut usage, cycle_usage);
-                                    }
-                                }
-                            }
-                            if emit(client, RunEvent::CycleInterrupted).await.is_err() {
-                                return (client_failure(), usage);
-                            }
-                            checkpoint = match super::messages::append_batches(
-                                &self.store,
-                                prepared,
-                                client,
-                                cancellation,
-                                checkpoint,
-                                std::mem::take(&mut pending_insertions),
-                            )
-                            .await
-                            {
-                                Ok((checkpoint, _)) => checkpoint,
-                                Err(outcome) => return (outcome, usage),
-                            };
-                            checkpoint = match super::messages::append_batches(
-                                &self.store,
-                                prepared,
-                                client,
-                                cancellation,
-                                checkpoint,
-                                vec![interruption],
-                            )
-                            .await
-                            {
-                                Ok((checkpoint, _)) => checkpoint,
-                                Err(outcome) => return (outcome, usage),
-                            };
-                            continue 'model;
-                        },
-                        result = &mut cycle => break result,
-                    }
+                                           biased;
+                                           command = client.commands.recv() => {
+                                               let interruption = match command {
+                                                   Some(RunCommand::InsertMessages(insertion)) => {
+                                                       pending_insertions.push(insertion);
+                                                       continue;
+                                                   }
+                                                   Some(RunCommand::BreakMessages(messages)) => messages,
+                                                   Some(RunCommand::Cancel) => {
+                                                       cycle_cancellation.cancel();
+                                                       let _ = cycle.await;
+                                                       let _ = emit(client, RunEvent::CycleInterrupted).await;
+                                                       return (RunOutcome::Cancelled, usage);
+                                                   }
+                                                   Some(RunCommand::ToolResult(_)) => {
+                                                       cycle_cancellation.cancel();
+                                                       let _ = cycle.await;
+                                                       let _ = emit(client, RunEvent::CycleInterrupted).await;
+                                                       return (
+                                                           RunOutcome::Failed(RunFailure::Protocol(
+                                                               "received a tool result while the model was running".into(),
+                                                           )),
+                                                           usage,
+                                                       );
+                                                   }
+                                                   None => {
+                                                       cycle_cancellation.cancel();
+                                                       let _ = cycle.await;
+                                                       let _ = emit(client, RunEvent::CycleInterrupted).await;
+                                                       return (client_failure(), usage);
+                                                   }
+                                               };
+                                               cycle_cancellation.cancel();
+                                               let interrupted = cycle.await;
+                                               match interrupted {
+                                                   Ok(cycle) => {
+                                                       if let Some(cycle_usage) = cycle.usage {
+                                                           update_context_usage_anchor(
+                                                               &mut context_usage_anchor,
+                                                               cycle_usage,
+                                                               anchored_messages,
+                                                           );
+                    self.store.set_usage(&prepared.conversation_id,&prepared.run_id, context_usage_anchor);
+                                                           accumulate_usage(&mut usage, cycle_usage);
+                                                       }
+                                                   }
+                                                   Err(failure) => {
+                                                       if let Some(cycle_usage) = failure.usage {
+                                                           update_context_usage_anchor(
+                                                               &mut context_usage_anchor,
+                                                               cycle_usage,
+                                                               anchored_messages,
+                                                           );
+                    self.store.set_usage(&prepared.conversation_id,&prepared.run_id, context_usage_anchor);
+                                                           accumulate_usage(&mut usage, cycle_usage);
+                                                       }
+                                                   }
+                                               }
+                                               if emit(client, RunEvent::CycleInterrupted).await.is_err() {
+                                                   return (client_failure(), usage);
+                                               }
+                                               checkpoint = match super::messages::append_batches(
+                                                   &self.store,
+                                                   prepared,
+                                                   client,
+                                                   cancellation,
+                                                   checkpoint,
+                                                   std::mem::take(&mut pending_insertions),
+                                               )
+                                               .await
+                                               {
+                                                   Ok((checkpoint, _)) => checkpoint,
+                                                   Err(outcome) => return (outcome, usage),
+                                               };
+                                               checkpoint = match super::messages::append_batches(
+                                                   &self.store,
+                                                   prepared,
+                                                   client,
+                                                   cancellation,
+                                                   checkpoint,
+                                                   vec![interruption],
+                                               )
+                                               .await
+                                               {
+                                                   Ok((checkpoint, _)) => checkpoint,
+                                                   Err(outcome) => return (outcome, usage),
+                                               };
+                                               continue 'model;
+                                           },
+                                           result = &mut cycle => break result,
+                                       }
                 };
                 match cycle {
                     Ok(cycle) => break 'attempt cycle,
@@ -389,6 +386,11 @@ impl RunEngine {
                                 &mut context_usage_anchor,
                                 cycle_usage,
                                 anchored_messages,
+                            );
+                            self.store.set_usage(
+                                &prepared.conversation_id,
+                                &prepared.run_id,
+                                context_usage_anchor,
                             );
                             accumulate_usage(&mut usage, cycle_usage);
                         }
@@ -440,6 +442,11 @@ impl RunEngine {
                                 Ok((next_checkpoint, compaction_usage)) => {
                                     checkpoint = next_checkpoint;
                                     context_usage_anchor = None;
+                                    self.store.set_usage(
+                                        &prepared.conversation_id,
+                                        &prepared.run_id,
+                                        None,
+                                    );
                                     if let Some(compaction_usage) = compaction_usage {
                                         accumulate_usage(&mut usage, compaction_usage);
                                     }
@@ -547,6 +554,11 @@ impl RunEngine {
                     &mut context_usage_anchor,
                     cycle_usage,
                     anchored_messages,
+                );
+                self.store.set_usage(
+                    &prepared.conversation_id,
+                    &prepared.run_id,
+                    context_usage_anchor,
                 );
                 accumulate_usage(&mut usage, cycle_usage);
             }
@@ -980,13 +992,12 @@ impl RunEngine {
 }
 
 async fn hydrate_tool_images(
-    store: &Store,
+    store: &MemoryStore,
     messages: &mut [crate::model::ProjectedMessage],
 ) -> crate::Result<()> {
     use crate::{
         model::{ContentPart, ProjectedContent},
         store::BlobId,
-        Error,
     };
 
     for message in messages {
@@ -997,9 +1008,13 @@ async fn hydrate_tool_images(
             continue;
         };
         let id = BlobId::from_base64(&image.blob_id)?;
-        let data = store.get_blob(&id).await?.ok_or_else(|| {
-            Error::Protocol(format!("Read image Blob is missing: {}", image.blob_id))
-        })?;
+        let Some(data) = store.get_blob(&id) else {
+            result.content.push_str(
+                "
+[图片在助手重启后不可用]",
+            );
+            continue;
+        };
         result.provider_parts = vec![
             ContentPart::Text {
                 text: result.content.clone(),
@@ -1073,7 +1088,7 @@ fn failure_message(failure: &RunFailure) -> String {
     match failure {
         RunFailure::Protocol(message)
         | RunFailure::Provider(message)
-        | RunFailure::Store(message)
+        | RunFailure::MemoryStore(message)
         | RunFailure::Client(message) => message.clone(),
     }
 }

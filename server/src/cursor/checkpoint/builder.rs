@@ -9,7 +9,7 @@ use crate::{
         transport::TransportHandle,
     },
     model::{CanonicalMessage, ToolCall, ToolDefinition, ToolRoundAssistant},
-    store::Store,
+    store::MemoryStore,
     Result,
 };
 
@@ -17,7 +17,7 @@ use super::{derived, roots::RootFrontier, turns::TurnFrontier};
 
 #[derive(Clone)]
 pub struct CheckpointBuilder {
-    pub(super) store: Store,
+    pub(super) store: MemoryStore,
     pub(super) sync: BlobSynchronizer,
     pub(super) parent_tool_call_id: Option<String>,
     pub(super) base: pb::ConversationStateStructure,
@@ -35,7 +35,7 @@ pub struct CheckpointBuilder {
 
 impl CheckpointBuilder {
     pub fn new(
-        store: Store,
+        store: MemoryStore,
         sync: BlobSynchronizer,
         parent_tool_call_id: Option<String>,
         base: Option<pb::ConversationStateStructure>,

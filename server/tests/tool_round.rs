@@ -996,7 +996,7 @@ async fn one_run_can_auto_compact_again_after_more_tool_output() {
 
 #[tokio::test]
 async fn provider_tool_use_waits_for_client_result_then_calls_provider_again() {
-    let (directory, store) = fixtures::temp_store().await;
+    let (_directory, store) = fixtures::temp_store().await;
     let provider = fake_provider::FakeProvider::default();
     provider.push(vec![
         ModelEvent::Start {
@@ -1154,19 +1154,11 @@ async fn provider_tool_use_waits_for_client_result_then_calls_provider_again() {
     assert!(saw_exec);
     assert!(saw_typed_completion);
     assert_eq!(provider.requests().len(), 2);
-    let database = sqlx::SqlitePool::connect(&format!(
-        "sqlite://{}",
-        directory.path().join("test.db").display()
-    ))
-    .await
-    .unwrap();
-    let provider_call_index: i64 =
-        sqlx::query_scalar("SELECT provider_call_index FROM runs WHERE cursor_request_id = ?")
-            .bind("tool-request")
-            .fetch_one(&database)
-            .await
-            .unwrap();
-    assert_eq!(provider_call_index, 1);
+    assert!(store
+        .active_run_for_cursor_request("tool-request")
+        .await
+        .unwrap()
+        .is_none());
     let messages = store
         .load_current_messages(&cursor_server::model::ConversationId::new(
             "tool-conversation",

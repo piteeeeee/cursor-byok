@@ -10,7 +10,7 @@ use crate::model::{CheckpointId, ToolCall, ToolRoundId, Usage};
 pub enum RunFailure {
     Protocol(String),
     Provider(String),
-    Store(String),
+    MemoryStore(String),
     Client(String),
 }
 
@@ -19,7 +19,7 @@ impl RunFailure {
         match self {
             Self::Protocol(_) => "protocol",
             Self::Provider(_) => "provider",
-            Self::Store(_) => "store",
+            Self::MemoryStore(_) => "store",
             Self::Client(_) => "client",
         }
     }
@@ -33,22 +33,22 @@ impl From<crate::Error> for RunFailure {
             | Error::Config(message)
             | Error::PermissionDenied(message) => Self::Protocol(message),
             Error::Provider(message) => Self::Provider(message),
-            Error::Store(message) => Self::Store(message),
+            Error::Store(message) => Self::MemoryStore(message),
             Error::Cancelled => Self::Client("run was cancelled".into()),
             Error::Http(error) => Self::Provider(error.to_string()),
-            Error::Database(error) => Self::Store(error.to_string()),
-            Error::Migration(error) => Self::Store(error.to_string()),
+            Error::Database(error) => Self::MemoryStore(error.to_string()),
+            Error::Migration(error) => Self::MemoryStore(error.to_string()),
             Error::MigrationTimeout {
                 stage,
                 timeout_seconds,
-            } => Self::Store(format!(
+            } => Self::MemoryStore(format!(
                 "database migration stage '{stage}' timed out after {timeout_seconds} seconds"
             )),
-            Error::Io(error) => Self::Store(error.to_string()),
+            Error::Io(error) => Self::MemoryStore(error.to_string()),
             Error::Decode(error) => Self::Protocol(error.to_string()),
             Error::Encode(error) => Self::Protocol(error.to_string()),
             Error::Json(error) => Self::Protocol(error.to_string()),
-            Error::RunNotFound(run_id) => Self::Store(format!("run not found: {run_id}")),
+            Error::RunNotFound(run_id) => Self::MemoryStore(format!("run not found: {run_id}")),
         }
     }
 }

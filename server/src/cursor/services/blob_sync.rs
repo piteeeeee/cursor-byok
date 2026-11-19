@@ -13,7 +13,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::{
     cursor::protocol::proto::agent::v1 as pb,
     cursor::transport::TransportHandle,
-    store::{BlobEdge, BlobId, Store},
+    store::{BlobId, MemoryStore},
     Error, Result,
 };
 
@@ -29,7 +29,7 @@ pub struct BlobSynchronizer {
 
 struct Inner {
     request_id: String,
-    store: Store,
+    store: MemoryStore,
     handle: TransportHandle,
     next_id: AtomicU32,
     set_requests: Mutex<HashMap<u32, PendingSet>>,
@@ -49,7 +49,7 @@ struct PendingGet {
 }
 
 impl BlobSynchronizer {
-    pub fn new(request_id: String, store: Store, handle: TransportHandle) -> Self {
+    pub fn new(request_id: String, store: MemoryStore, handle: TransportHandle) -> Self {
         Self {
             inner: Arc::new(Inner {
                 request_id,
@@ -67,8 +67,8 @@ impl BlobSynchronizer {
         &self.inner.request_id
     }
 
-    pub async fn persist(&self, data: &[u8], edges: &[BlobEdge]) -> Result<BlobId> {
-        let id = self.inner.store.put_blob(data, edges).await?;
+    pub async fn persist(&self, data: &[u8]) -> Result<BlobId> {
+        let id = self.inner.store.put_blob(data);
         self.ensure_set(&id, data).await?;
         Ok(id)
     }
@@ -118,7 +118,7 @@ impl BlobSynchronizer {
     }
 
     pub async fn get(&self, blob_id: &BlobId) -> Result<Option<Vec<u8>>> {
-        if let Some(data) = self.inner.store.get_blob(blob_id).await? {
+        if let Some(data) = self.inner.store.get_blob(blob_id) {
             return Ok(Some(data));
         }
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
@@ -165,7 +165,7 @@ impl BlobSynchronizer {
                 actual.to_base64()
             )));
         }
-        self.inner.store.put_blob(data, &[]).await?;
+        self.inner.store.put_blob(data);
         Ok(())
     }
 
@@ -218,7 +218,7 @@ impl BlobSynchronizer {
                                 actual.to_base64()
                             )))
                         } else {
-                            self.inner.store.put_blob(&data, &[]).await?;
+                            self.inner.store.put_blob(&data);
                             Ok(Some(data))
                         }
                     } else {

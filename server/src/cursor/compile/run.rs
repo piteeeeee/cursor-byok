@@ -17,7 +17,7 @@ use crate::{
         CanonicalMessage, ContentPart, ConversationId, MessageContent, Origin, PreparedRun,
         PromptSpec, Role, RunAction, RunId, RunKind,
     },
-    store::{BlobId, Store},
+    store::{BlobId, MemoryStore},
     Error, Result,
 };
 
@@ -47,7 +47,7 @@ pub struct CursorRunContext {
 
 pub(crate) struct PrepareDependencies<'a> {
     pub compiler: &'a PromptCompiler,
-    pub store: &'a Store,
+    pub store: &'a MemoryStore,
     pub models: &'a crate::config::Models,
     pub checkpoint: &'a CheckpointBuilder,
     pub blob_sync: &'a BlobSynchronizer,
@@ -90,6 +90,7 @@ pub(crate) async fn prepare(
     };
     stages.mark("hydrate conversation state");
     let request_context = context::hydrate(request, context_sync).await?;
+    context_sync.remember(conversation_id.as_str(), &request_context);
     stages.mark("request context");
     let ActionProjection {
         mode: mode_number,

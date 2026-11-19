@@ -11,7 +11,7 @@ use crate::{
     provider::Provider,
     run::{CommandResult, RunHandle},
     search::WebCache,
-    store::Store,
+    store::MemoryStore,
 };
 
 use super::{CompiledMessages, MessageDelivery, PendingMessages, TransportCommand};
@@ -23,7 +23,7 @@ pub struct ConversationRegistry {
 
 #[derive(Clone)]
 pub(crate) struct ConversationDependencies {
-    pub store: Store,
+    pub store: MemoryStore,
     pub runtime: RuntimeConfig,
     pub provider: Arc<dyn Provider>,
     pub compiler: PromptCompiler,
@@ -45,7 +45,7 @@ struct ActiveRun {
 
 impl ConversationRegistry {
     pub fn new(
-        store: Store,
+        store: MemoryStore,
         runtime: RuntimeConfig,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,

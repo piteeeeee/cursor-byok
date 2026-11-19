@@ -25,7 +25,7 @@ use cursor_server::{
     },
     model::{CanonicalMessage, ModelInvocation, ModelRequest, Origin, Role},
     provider::{ModelEvent, Provider, ProviderStream},
-    store::{BlobId, Store},
+    store::{BlobId, MemoryStore},
 };
 use prost::Message;
 use tokio_util::sync::CancellationToken;
@@ -73,7 +73,7 @@ impl Provider for TimedProvider {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn run_prefix_does_not_scan_unrelated_checkpoint_history() {
+async fn new_conversations_share_context_within_ttft_budget() {
     // Per-stage timings of the production pipeline reach the test output.
     {
         use tracing_subscriber::prelude::*;
@@ -86,22 +86,7 @@ async fn run_prefix_does_not_scan_unrelated_checkpoint_history() {
             .with(tracing_subscriber::fmt::layer().with_test_writer())
             .try_init();
     }
-    let database_url = std::env::var("TTFT_DATABASE_URL").ok().unwrap_or_else(|| {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.keep().join("ttft.db");
-        format!("sqlite://{}", path.display())
-    });
-    let store = Store::connect(&database_url).await.unwrap();
-    let conversation = match std::env::var("TTFT_CONVERSATION") {
-        Ok(conversation) => conversation,
-        Err(_) => {
-            // 1M message references in unrelated conversations; the real
-            // database holds 1.2M. Scanning them costs whole seconds.
-            seed_unrelated_history(&store, 1_000).await;
-            "ttft-probe-conversation".to_string()
-        }
-    };
-
+    let store = MemoryStore::default();
     let provider = TimedProvider::default();
     let registry = TransportRegistry::new(
         store.clone(),
@@ -110,12 +95,10 @@ async fn run_prefix_does_not_scan_unrelated_checkpoint_history() {
         PromptCompiler::new(PromptAssets::embedded().unwrap()),
     );
 
-    let iterations: u64 = std::env::var("TTFT_ITERATIONS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(3);
-    let mut slowest = 0;
+    let iterations = 2;
+    let mut context_requests = 0;
     for iteration in 0..iterations {
+        let conversation = format!("probe-conversation-{iteration}");
         let request_id = format!("ttft-probe-{iteration}");
         let handle = registry.get_or_create(&request_id).await.unwrap();
         let origin = Instant::now();
@@ -149,6 +132,10 @@ async fn run_prefix_does_not_scan_unrelated_checkpoint_history() {
                     Ok(server) => server,
                     Err(_) => continue,
                 };
+                if matches!(&server.message,Some(pb::agent_server_message::Message::ExecServerMessage(exec)) if matches!(&exec.message,Some(pb::exec_server_message::Message::RequestContextArgs(_))))
+                {
+                    context_requests += 1;
+                }
                 let Some(reply) = client_reply(&store, server).await else {
                     continue;
                 };
@@ -168,22 +155,22 @@ async fn run_prefix_does_not_scan_unrelated_checkpoint_history() {
             }
         }
         let elapsed = provider.first_request_ms.load(Ordering::SeqCst);
-        slowest = slowest.max(elapsed);
+        assert_eq!(
+            context_requests, 1,
+            "second conversation must reuse context"
+        );
+        assert!(
+            elapsed < if iteration == 0 { 50 } else { 15 },
+            "iteration {iteration} took {elapsed} ms"
+        );
         println!("iteration {iteration}: append -> first provider request {elapsed} ms");
     }
     assert_eq!(provider.requests.lock().unwrap().len(), iterations as usize);
-    // A whole-table scan of the seeded references measures ~5 s; the indexed
-    // lookup measures milliseconds. The bound leaves room for slow CI disks
-    // without admitting a scan.
-    assert!(
-        slowest < 1_000,
-        "first provider request took {slowest} ms; the Run prefix must not scan checkpoint history"
-    );
 }
 
 /// Answers the assistant's Blob and request-context round trips as Cursor does.
 async fn client_reply(
-    store: &Store,
+    store: &MemoryStore,
     server: pb::AgentServerMessage,
 ) -> Option<Vec<pb::AgentClientMessage>> {
     match server.message? {
@@ -195,7 +182,7 @@ async fn client_reply(
                 pb::kv_server_message::Message::GetBlobArgs(get) => {
                     let blob_id = BlobId::from_bytes(&get.blob_id).unwrap();
                     pb::kv_client_message::Message::GetBlobResult(pb::GetBlobResult {
-                        blob_data: store.get_blob(&blob_id).await.unwrap(),
+                        blob_data: store.get_blob(&blob_id),
                         error: None,
                     })
                 }
@@ -250,61 +237,6 @@ async fn client_reply(
     }
 }
 
-/// Seeds conversations that hold only message references, the way real ones do.
-async fn seed_unrelated_history(store: &Store, conversations: usize) {
-    let pool = store.pool();
-    let mut tx = pool.begin().await.unwrap();
-    for conversation in 0..conversations {
-        let conversation_id = format!("unrelated-{conversation}");
-        sqlx::query("INSERT INTO conversations(conversation_id, updated_at_ms) VALUES (?, ?)")
-            .bind(&conversation_id)
-            .bind(1)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        let checkpoint: i64 = sqlx::query_scalar(
-            "INSERT INTO conversation_checkpoints(conversation_id, parent_checkpoint_id,
-             state_digest, created_at_ms) VALUES (?, NULL, zeroblob(32), 1)
-             RETURNING checkpoint_id",
-        )
-        .bind(&conversation_id)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
-        let payload = serde_json::to_string(&fixtures::user("shared-message", "history")).unwrap();
-        sqlx::query(
-            "WITH RECURSIVE ordinals(ordinal) AS (
-                 SELECT 0
-                 UNION ALL
-                 SELECT ordinal + 1 FROM ordinals WHERE ordinal < 999
-             )
-             INSERT INTO messages(conversation_id, message_id, role, origin, payload_json,
-                 created_at_ms)
-             SELECT ?, 'shared-message-' || ordinal, 'user', 'user', ?, 1 FROM ordinals",
-        )
-        .bind(&conversation_id)
-        .bind(&payload)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-        sqlx::query(
-            "WITH RECURSIVE ordinals(ordinal) AS (
-                 SELECT 0
-                 UNION ALL
-                 SELECT ordinal + 1 FROM ordinals WHERE ordinal < 999
-             )
-             INSERT INTO checkpoint_messages(checkpoint_id, ordinal, conversation_id, message_id)
-             SELECT ?, ordinal, ?, 'shared-message-' || ordinal FROM ordinals",
-        )
-        .bind(checkpoint)
-        .bind(&conversation_id)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    }
-    tx.commit().await.unwrap();
-}
-
 fn request_message(conversation: &str, iteration: u64) -> pb::AgentClientMessage {
     pb::AgentClientMessage {
         message: Some(pb::agent_client_message::Message::RunRequest(
@@ -314,6 +246,11 @@ fn request_message(conversation: &str, iteration: u64) -> pb::AgentClientMessage
                     ..Default::default()
                 }),
                 action: Some(pb::ConversationAction {
+                    request_context_parts: Some(pb::RequestContextPartReferences {
+                        rules_blob_id: vec![17; 32],
+                        rules_byte_length: 1,
+                        ..Default::default()
+                    }),
                     action: Some(pb::conversation_action::Action::UserMessageAction(
                         pb::UserMessageAction {
                             user_message: Some(pb::UserMessage {
