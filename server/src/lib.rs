@@ -15,5 +15,5 @@ pub mod store;
 pub(crate) mod timing;
 
 pub use app::App;
-pub use config::Config;
+pub use config::Settings;
 pub use error::{Error, Result};

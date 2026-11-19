@@ -103,9 +103,10 @@ async fn bidi_append_gzip_body_is_decompressed_before_protobuf_decode() {
             .as_path(),
     )
     .unwrap();
-    let clients = NetworkClients::new(store.clone());
+    let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -148,9 +149,10 @@ async fn bidi_append_rejects_simultaneous_data_and_data_binary_with_bad_request(
             .as_path(),
     )
     .unwrap();
-    let clients = NetworkClients::new(store.clone());
+    let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -191,33 +193,30 @@ async fn bidi_append_data_binary_routes_to_local_provider_and_streams_run_sse() 
     use futures_util::StreamExt;
 
     let (_directory, store) = fixtures::temp_store().await;
-    let saved_model = store
-        .create_model(&ModelConfigInput {
-            sort_order: 1,
-            display_name: "deepseek-v4.1-flash".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1".into(),
-            use_full_url: false,
-            api_key: "test-key".into(),
-            tooltip_data: "test".into(),
-            model_id: "deepseek-v4.1-flash".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: serde_json::json!({}),
-            custom_headers_enabled: false,
-            custom_headers: serde_json::json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: serde_json::json!({}),
-            context_window_tokens: None,
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
+    let saved_model = fixtures::model(ModelConfigInput {
+        sort_order: 1,
+        display_name: "deepseek-v4.1-flash".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1".into(),
+        use_full_url: false,
+        api_key: "test-key".into(),
+        tooltip_data: "test".into(),
+        model_id: "deepseek-v4.1-flash".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: serde_json::json!({}),
+        custom_headers_enabled: false,
+        custom_headers: serde_json::json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: serde_json::json!({}),
+        context_window_tokens: None,
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
 
     let provider = fake_provider::FakeProvider::default();
     provider.push(vec![
@@ -235,8 +234,13 @@ async fn bidi_append_data_binary_routes_to_local_provider_and_streams_run_sse() 
             .as_path(),
     )
     .unwrap();
-    let clients = NetworkClients::new(store.clone());
-    let registry = TransportRegistry::new(store, Arc::new(provider), PromptCompiler::new(assets));
+    let clients = NetworkClients::new(None);
+    let registry = TransportRegistry::new(
+        store,
+        fixtures::runtime(vec![saved_model.clone()]),
+        Arc::new(provider),
+        PromptCompiler::new(assets),
+    );
     let app = cursor::router(registry, clients).unwrap();
 
     let request_id = "req-data-binary-e2e";
@@ -387,9 +391,10 @@ async fn bidi_append_declines_captured_cursor_331_run_inference_payload_with_per
             .as_path(),
     )
     .unwrap();
-    let clients = NetworkClients::new(store.clone());
+    let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -436,9 +441,10 @@ async fn run_inference_sse_and_ws_upgrade_return_fallback_responses() {
             .as_path(),
     )
     .unwrap();
-    let clients = NetworkClients::new(store.clone());
+    let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );

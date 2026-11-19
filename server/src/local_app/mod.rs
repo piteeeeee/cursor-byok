@@ -72,6 +72,8 @@ pub struct CursorHarness {
 
 struct Inner {
     store: Store,
+    proxy_port: u16,
+    configured_models: usize,
     ca: CaManager,
     ca_initialization: Mutex<()>,
     backend_addr: RwLock<Option<SocketAddr>>,
@@ -79,11 +81,18 @@ struct Inner {
 }
 
 impl CursorHarness {
-    pub fn new(store: Store) -> Result<Self> {
+    pub fn new(
+        store: Store,
+        proxy_port: u16,
+        configured_models: usize,
+        ca_dir: std::path::PathBuf,
+    ) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(Inner {
                 store,
-                ca: CaManager::managed()?,
+                proxy_port,
+                configured_models,
+                ca: CaManager::managed(ca_dir)?,
                 ca_initialization: Mutex::new(()),
                 backend_addr: RwLock::new(None),
                 proxy: Mutex::new(ProxyRuntime::default()),
@@ -104,8 +113,7 @@ impl CursorHarness {
     }
 
     pub async fn status(&self) -> Result<CursorHarnessStatus> {
-        let models = self.inner.store.models().await?;
-        let configured_models = models.len();
+        let configured_models = self.inner.configured_models;
         let enabled_models = configured_models;
         let ca = self.inner.ca.state()?;
         if self.inner.store.cursor_takeover_enabled().await?
@@ -190,12 +198,8 @@ impl CursorHarness {
             return Ok(());
         }
         let ca = self.inner.ca.load()?;
-        let requested_port = self.inner.store.port_settings().await?.proxy_port;
-        let (url, actual_port) = proxy.start(backend_addr, ca, requested_port).await?;
-        if let Err(error) = self.inner.store.set_proxy_port(actual_port).await {
-            proxy.stop().await;
-            return Err(error);
-        }
+        let requested_port = self.inner.proxy_port;
+        let (url, _actual_port) = proxy.start(backend_addr, ca, requested_port).await?;
         if let Err(error) = apply_cursor_configuration(&url).await {
             proxy.stop().await;
             return Err(error);

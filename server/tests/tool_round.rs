@@ -827,33 +827,30 @@ async fn unknown_exec_id_is_ignored() {
 #[tokio::test]
 async fn one_run_can_auto_compact_again_after_more_tool_output() {
     let (_directory, store) = fixtures::temp_store().await;
-    let model = store
-        .create_model(&ModelConfigInput {
-            sort_order: 0,
-            display_name: "Repeated compaction".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1/chat/completions".into(),
-            use_full_url: true,
-            api_key: "test-key".into(),
-            tooltip_data: "Repeated compaction".into(),
-            model_id: "repeated-compaction-model".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: json!({}),
-            custom_headers_enabled: false,
-            custom_headers: json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: json!({}),
-            context_window_tokens: Some(25_000),
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
+    let model = fixtures::model(ModelConfigInput {
+        sort_order: 0,
+        display_name: "Repeated compaction".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1/chat/completions".into(),
+        use_full_url: true,
+        api_key: "test-key".into(),
+        tooltip_data: "Repeated compaction".into(),
+        model_id: "repeated-compaction-model".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: json!({}),
+        custom_headers_enabled: false,
+        custom_headers: json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: json!({}),
+        context_window_tokens: Some(25_000),
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
     let provider = fake_provider::FakeProvider::default();
     provider.push(tool_call_response("repeat-call-1"));
     provider.push(text_events("first summary"));
@@ -868,6 +865,7 @@ async fn one_run_can_auto_compact_again_after_more_tool_output() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::runtime(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -1033,6 +1031,7 @@ async fn provider_tool_use_waits_for_client_result_then_calls_provider_again() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -1297,6 +1296,7 @@ async fn duplicate_tool_call_id_across_rounds_does_not_wedge_the_run() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );

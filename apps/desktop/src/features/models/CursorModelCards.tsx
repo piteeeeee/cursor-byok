@@ -1,10 +1,9 @@
 import type { IconifyIcon } from "@iconify/react/offline";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import Sortable from "sortablejs";
+import { useState, type ReactNode } from "react";
 import type { Model } from "../../shared/api";
 import { Card } from "../../shared/ui/Card";
 import { Icon } from "../../shared/ui/Icon";
-import { chevronDownIcon, chevronRightIcon, claudeIcon, dragIcon, editIcon, flatColorOrganizationIcon, openAiIcon } from "../../shared/ui/icons";
+import { chevronDownIcon, chevronRightIcon, claudeIcon, flatColorOrganizationIcon, openAiIcon } from "../../shared/ui/icons";
 import { TruncatedButton } from "../../shared/ui/TruncatedButton";
 import { CursorModelTestResult, type CursorModelTestState } from "./CursorModelTestResult";
 import styles from "./CursorSettings.module.scss";
@@ -25,15 +24,6 @@ type CursorModelCardsProps = {
   testingModelHashes: Set<string>;
   testResults: Map<string, CursorModelTestState>;
   onTest: (model: Model) => void;
-  onEdit: (model: Model) => void;
-  onDuplicate: (model: Model) => void;
-  onDelete: (model: Model) => void;
-  onReorder: (modelHashes: string[]) => void;
-  onGroupSettings: (group: CursorModelGroup) => void;
-};
-
-type ModelGridProps = Omit<CursorModelCardsProps, "grouping"> & {
-  sortable: boolean;
 };
 
 export function cursorModelGroups(models: Model[], grouping: Exclude<CursorModelGrouping, "flat">): CursorModelGroup[] {
@@ -50,16 +40,19 @@ export function cursorModelGroups(models: Model[], grouping: Exclude<CursorModel
   return [...groups.values()];
 }
 
+/**
+ * 模型页是只读列表：模型来自 `~/.cursor-byok-lite/config.toml`，
+ * 本页只负责展示与连通性测试，不做任何写入。
+ */
 export function CursorModelCards(props: CursorModelCardsProps) {
   const builtins = props.grouping === "flat"
-    ? <div style={{ paddingTop: "10px" }}><ModelGrid {...props} sortable /></div>
+    ? <div style={{ paddingTop: "10px" }}><ModelGrid {...props} /></div>
     : <div className={styles.modelGroups}>
       {cursorModelGroups(props.models, props.grouping).map((group) => <CollapsibleGroup
         key={group.key}
         label={group.label}
         icon={group.icon}
         defaultOpen={false}
-        onSettings={props.grouping === "provider" ? () => props.onGroupSettings(group) : undefined}
       >
         {group.models.map((model) => <ModelListRow
           key={model.model_hash}
@@ -68,20 +61,16 @@ export function CursorModelCards(props: CursorModelCardsProps) {
           testing={props.testingModelHashes.has(model.model_hash)}
           result={props.testResults.get(model.model_hash)}
           onTest={() => props.onTest(model)}
-          onEdit={() => props.onEdit(model)}
-          onDuplicate={() => props.onDuplicate(model)}
-          onDelete={() => props.onDelete(model)}
         />)}
       </CollapsibleGroup>)}
     </div>;
   return <div className={styles.modelGroups}>{builtins}</div>;
 }
 
-function CollapsibleGroup({ label, icon, defaultOpen = true, onSettings, children }: {
+function CollapsibleGroup({ label, icon, defaultOpen = true, children }: {
   label: string;
   icon?: IconifyIcon;
   defaultOpen?: boolean;
-  onSettings?: () => void;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -96,10 +85,6 @@ function CollapsibleGroup({ label, icon, defaultOpen = true, onSettings, childre
         {icon && <Icon icon={icon} size="1.1em" />}
         <span className={styles.groupLabel}>{label}</span>
       </button>
-      {onSettings && <button type="button" className={styles.groupSettings} onClick={onSettings}>
-        <Icon icon={editIcon} size="1em" />
-        {t("分组设置")}
-      </button>}
       <button
         type="button"
         className={styles.groupChevron}
@@ -114,15 +99,12 @@ function CollapsibleGroup({ label, icon, defaultOpen = true, onSettings, childre
   </Card>;
 }
 
-function ModelListRow({ model, disabled, testing, result, onTest, onEdit, onDuplicate, onDelete }: {
+function ModelListRow({ model, disabled, testing, result, onTest }: {
   model: Model;
   disabled: boolean;
   testing: boolean;
   result: CursorModelTestState | undefined;
   onTest: () => void;
-  onEdit: () => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
 }) {
   return <div className={styles.modelRow}>
     <div className={styles.modelRowName}>
@@ -132,83 +114,22 @@ function ModelListRow({ model, disabled, testing, result, onTest, onEdit, onDupl
     <CursorModelTestResult compact state={result} testing={testing} />
     <div className={styles.modelCardActions}>
       <TruncatedButton size="small" disabled={disabled && !testing} label={testing ? t("取消测试") : t("测试")} onClick={onTest} />
-      <TruncatedButton size="small" disabled={disabled} label={t("编辑")} onClick={onEdit} />
-      <TruncatedButton size="small" disabled={disabled} label={t("复制")} onClick={onDuplicate} />
-      <TruncatedButton size="small" className={styles.deleteButton} disabled={disabled} label={t("删除")} onClick={onDelete} />
     </div>
   </div>;
 }
 
 function ModelGrid({
   models,
-  sortable: sortableEnabled,
   disabled,
   testingModelHashes,
   testResults,
   onTest,
-  onEdit,
-  onDuplicate,
-  onDelete,
-  onReorder,
-}: ModelGridProps) {
-  const grid = useRef<HTMLDivElement>(null);
-  const sortable = useRef<Sortable | null>(null);
-  const currentModels = useRef(models);
-  const reorder = useRef(onReorder);
-  currentModels.current = models;
-  reorder.current = onReorder;
-
-  useEffect(() => {
-    if (!sortableEnabled || !grid.current) return;
-    sortable.current = Sortable.create(grid.current, {
-      animation: 160,
-      dataIdAttr: "data-model-hash",
-      draggable: `.${styles.modelCard}`,
-      handle: `.${styles.sortHandle}`,
-      ghostClass: styles.sortGhost,
-      chosenClass: styles.sortChosen,
-      dragClass: styles.sortDragging,
-      forceFallback: true,
-      fallbackOnBody: true,
-      fallbackTolerance: 3,
-      onEnd: (event) => {
-        const oldIndex = event.oldDraggableIndex ?? event.oldIndex;
-        const newIndex = event.newDraggableIndex ?? event.newIndex;
-        if (typeof oldIndex !== "number"
-          || typeof newIndex !== "number"
-          || oldIndex === newIndex) {
-          sortable.current?.sort(currentModels.current.map((model) => model.model_hash), false);
-          return;
-        }
-        const reordered = currentModels.current.slice();
-        const [moved] = reordered.splice(oldIndex, 1);
-        if (!moved || newIndex < 0 || newIndex > reordered.length) {
-          sortable.current?.sort(currentModels.current.map((model) => model.model_hash), false);
-          return;
-        }
-        reordered.splice(newIndex, 0, moved);
-        reorder.current(reordered.map((model) => model.model_hash));
-      },
-    });
-    return () => {
-      sortable.current?.destroy();
-      sortable.current = null;
-    };
-  }, [sortableEnabled]);
-
-  useEffect(() => {
-    sortable.current?.option("disabled", disabled);
-    sortable.current?.sort(models.map((model) => model.model_hash), false);
-  }, [disabled, models]);
-
-  return <div ref={grid} className={styles.modelGrid}>
+}: CursorModelCardsProps) {
+  return <div className={styles.modelGrid}>
     {models.map((model) => {
       const result = testResults.get(model.model_hash);
       const testing = testingModelHashes.has(model.model_hash);
       return <Card className={styles.modelCard} data-model-hash={model.model_hash} key={model.model_hash}>
-        {sortableEnabled && <button type="button" className={styles.sortHandle} disabled={disabled} aria-label={t("拖动排序")} title={t("拖动排序")} onClick={(event) => event.stopPropagation()}>
-          <Icon icon={dragIcon} size="1.25em" />
-        </button>}
         <div className={styles.modelCardContent}>
           <div className={styles.modelCardTop}>
             <div className={styles.modelCardName}>
@@ -225,9 +146,6 @@ function ModelGrid({
           </div>
           <div className={styles.modelCardActions}>
             <TruncatedButton size="small" disabled={disabled && !testing} label={testing ? t("取消测试") : t("测试")} onClick={() => onTest(model)} />
-            <TruncatedButton size="small" disabled={disabled} label={t("编辑")} onClick={() => onEdit(model)} />
-            <TruncatedButton size="small" disabled={disabled} label={t("复制")} onClick={() => onDuplicate(model)} />
-            <TruncatedButton size="small" className={styles.deleteButton} disabled={disabled} label={t("删除")} onClick={() => onDelete(model)} />
           </div>
         </div>
       </Card>;

@@ -541,7 +541,7 @@ async fn start_generation(
     let tools = ToolDispatcher::with_results(
         tool_runtime.clone(),
         results.clone(),
-        dependencies.store.clone(),
+        dependencies.runtime.outbound_proxy.clone(),
         dependencies.web_cache.clone(),
     );
     let generation = RunGeneration {
@@ -640,6 +640,7 @@ fn spawn_run_request(
                 compile::PrepareDependencies {
                     compiler: &dependencies.compiler,
                     store: &dependencies.store,
+                    models: &dependencies.runtime.models,
                     checkpoint: &checkpoint,
                     blob_sync: &blob_sync,
                     context_sync: &context_sync,

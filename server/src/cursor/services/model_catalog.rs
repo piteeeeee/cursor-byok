@@ -250,7 +250,7 @@ pub async fn available_models(
     Extension(proxy): Extension<CursorProxy>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
-    let models = registry.store().models().await?;
+    let models = registry.models().all();
     tracing::info!(
         model_count = models.len(),
         "appending BYOK models to Cursor AvailableModels"
@@ -277,7 +277,7 @@ pub async fn usable_models(
     Extension(proxy): Extension<CursorProxy>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
-    let models = registry.store().models().await?;
+    let models = registry.models().all();
     tracing::info!(
         model_count = models.len(),
         "appending BYOK models to Cursor GetUsableModels"
@@ -298,44 +298,50 @@ pub async fn usable_models(
 pub async fn default_model_for_cli(
     State(registry): State<TransportRegistry>,
 ) -> Result<Response<Body>> {
-    let models = registry.store().models().await?;
     Ok(local_response(
         agent::GetDefaultModelForCliResponse {
-            model: default_model_details(&models),
+            model: default_model_details(registry.models().all(), &registry.default_model()),
         }
         .encode_to_vec(),
     ))
 }
 
 pub async fn default_model(State(registry): State<TransportRegistry>) -> Result<Response<Body>> {
-    let models = registry.store().models().await?;
     Ok(local_response(
-        default_model_response(&models).encode_to_vec(),
+        default_model_response(registry.models().all(), &registry.default_model()).encode_to_vec(),
     ))
 }
 
 pub async fn default_model_nudge(
     State(registry): State<TransportRegistry>,
 ) -> Result<Response<Body>> {
-    let models = registry.store().models().await?;
     Ok(local_response(
-        default_model_nudge_response(&models).encode_to_vec(),
+        default_model_nudge_response(registry.models().all()).encode_to_vec(),
     ))
 }
 
-fn default_model_details(models: &[ModelConfig]) -> Option<agent::ModelDetails> {
-    models.first().map(usable_model)
+fn default_model_details(
+    models: &[ModelConfig],
+    default_model: &str,
+) -> Option<agent::ModelDetails> {
+    models
+        .iter()
+        .find(|model| model.model_hash == default_model || model.display_name == default_model)
+        .or_else(|| models.first())
+        .map(usable_model)
 }
 
-fn default_model_id(models: &[ModelConfig]) -> &str {
+fn default_model_id<'a>(models: &'a [ModelConfig], default_model: &str) -> &'a str {
     models
-        .first()
+        .iter()
+        .find(|model| model.model_hash == default_model || model.display_name == default_model)
+        .or_else(|| models.first())
         .map(|model| model.model_hash.as_str())
         .unwrap_or_default()
 }
 
-fn default_model_response(models: &[ModelConfig]) -> DefaultModelResponse {
-    let model = default_model_id(models).to_owned();
+fn default_model_response(models: &[ModelConfig], default_model: &str) -> DefaultModelResponse {
+    let model = default_model_id(models, default_model).to_owned();
     DefaultModelResponse {
         thinking_model: model.clone(),
         model,
@@ -717,10 +723,10 @@ mod tests {
     #[test]
     fn cli_default_responses_use_the_local_model_hash() {
         let models = vec![model()];
-        let details = default_model_details(&models).expect("default model");
+        let details = default_model_details(&models, "local-model-hash").expect("default model");
         assert_eq!(details.model_id, "local-model-hash");
 
-        let response = default_model_response(&models);
+        let response = default_model_response(&models, "local-model-hash");
         assert_eq!(response.model, "local-model-hash");
         assert_eq!(response.thinking_model, "local-model-hash");
 

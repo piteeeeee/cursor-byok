@@ -38,9 +38,7 @@ RUN apt-get update && \
 COPY --from=server /tmp/cursor-server /usr/local/bin/cursor-server
 COPY --from=web /src/apps/desktop/dist/ /app/console/
 
-ENV CURSOR_LISTEN_ADDR=0.0.0.0:3000 \
-    CURSOR_DATABASE_URL=sqlite:///data/cursor-server.db \
-    CURSOR_CONSOLE_DIR=/app/console \
+ENV CURSOR_CONSOLE_DIR=/app/console \
     RUST_LOG=cursor_server=info
 
 USER cursor-byok

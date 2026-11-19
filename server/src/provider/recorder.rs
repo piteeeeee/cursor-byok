@@ -338,9 +338,7 @@ fn error_kind(error: &crate::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{
-        ModelConfigInput, ModelType, NewLlmCall, ProviderType, OPENAI_CHAT_ENDPOINT,
-    };
+    use crate::model::{NewLlmCall, ProviderType};
 
     use super::*;
 
@@ -353,33 +351,6 @@ mod tests {
         ))
         .await
         .unwrap();
-        let model = store
-            .create_model(&ModelConfigInput {
-                sort_order: 0,
-                display_name: "Test Model".into(),
-                group_name: None,
-                model_type: ModelType::OpenAi,
-                base_url: "https://example.com/v1/chat/completions".into(),
-                use_full_url: true,
-                api_key: "test-key".into(),
-                tooltip_data: "Test Model".into(),
-                model_id: "test-model".into(),
-                reasoning_effort: None,
-                openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-                openai_extra_params_enabled: false,
-                openai_extra_params: serde_json::json!({}),
-                custom_headers_enabled: false,
-                custom_headers: serde_json::json!({}),
-                anthropic_extra_params_enabled: false,
-                anthropic_extra_params: serde_json::json!({}),
-                context_window_tokens: None,
-                max_completion_tokens: None,
-                anthropic_max_tokens: None,
-                anthropic_thinking_effort: None,
-                thinking_budget_tokens: None,
-            })
-            .await
-            .unwrap();
         let recorder = CallRecorder::start(
             store.clone(),
             NewLlmCall {
@@ -387,7 +358,7 @@ mod tests {
                 run_id: "run".into(),
                 conversation_id: "conversation".into(),
                 provider_call_index: 0,
-                model_hash: model.model_hash,
+                model_hash: "test-model-hash".into(),
                 provider_type: ProviderType::OpenAiChat,
                 provider_url: "https://example.com".into(),
                 request_type: ProviderType::OpenAiChat,

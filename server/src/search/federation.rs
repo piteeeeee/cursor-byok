@@ -3,8 +3,6 @@ use std::{cmp::Ordering, collections::HashMap};
 
 use futures_util::future::join_all;
 
-use crate::store::Store;
-
 use super::{catalog, SearchEngine, SearchHit};
 
 const RRF_K: f64 = 60.0;
@@ -18,7 +16,7 @@ pub struct WebSearch {
 
 #[derive(Clone)]
 enum SearchClient {
-    Managed(Store),
+    Managed(Option<String>),
     Direct(reqwest::Client),
 }
 
@@ -31,9 +29,9 @@ impl WebSearch {
         Self::with_engines(catalog::engines())
     }
 
-    pub(crate) fn managed(store: Store) -> Self {
+    pub(crate) fn managed(outbound_proxy: Option<String>) -> Self {
         Self {
-            client: SearchClient::Managed(store),
+            client: SearchClient::Managed(outbound_proxy),
             engines: catalog::engines(),
         }
     }
@@ -59,9 +57,10 @@ impl WebSearch {
             return Err(SearchError("query is empty".into()));
         }
         let client = match &self.client {
-            SearchClient::Managed(store) => crate::network::client(store)
-                .await
-                .map_err(|error| SearchError(format!("HTTP client failed: {error}")))?,
+            SearchClient::Managed(outbound_proxy) => {
+                crate::network::client(outbound_proxy.as_deref())
+                    .map_err(|error| SearchError(format!("HTTP client failed: {error}")))?
+            }
             SearchClient::Direct(client) => client.clone(),
         };
         let responses = join_all(

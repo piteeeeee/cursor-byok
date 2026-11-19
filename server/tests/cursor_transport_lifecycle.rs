@@ -25,6 +25,7 @@ async fn registry() -> (tempfile::TempDir, TransportRegistry) {
         directory,
         TransportRegistry::new(
             store,
+            fixtures::empty_runtime(),
             Arc::new(fake_provider::FakeProvider::default()),
             PromptCompiler::new(assets),
         ),

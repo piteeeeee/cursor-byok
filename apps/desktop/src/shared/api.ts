@@ -28,61 +28,6 @@ export interface Model {
   updated_at_ms: number;
 }
 
-export interface ModelInput {
-  sort_order: number;
-  display_name: string;
-  group_name: string | null;
-  type: ModelType;
-  base_url: string;
-  use_full_url: boolean;
-  api_key: string;
-  tooltip_data: string;
-  model_id: string;
-  reasoning_effort: string | null;
-  openai_endpoint: string;
-  openai_extra_params_enabled: boolean;
-  openai_extra_params: Record<string, unknown>;
-  custom_headers_enabled: boolean;
-  custom_headers: Record<string, string>;
-  anthropic_extra_params_enabled: boolean;
-  anthropic_extra_params: Record<string, unknown>;
-  context_window_tokens: number | null;
-  max_completion_tokens: number | null;
-  anthropic_max_tokens: number | null;
-  anthropic_thinking_effort: string | null;
-  thinking_budget_tokens: number | null;
-}
-
-export interface ModelDiscoveryInput {
-  type: ModelType;
-  base_url: string;
-  api_key: string;
-  custom_headers_enabled: boolean;
-  custom_headers: Record<string, string>;
-}
-
-export interface LegacyModelImportPreviewItem {
-  model_hash: string;
-  display_name: string;
-  model_id: string;
-  type: ModelType;
-  existing: boolean;
-}
-
-export interface LegacyModelImportPreview {
-  source: string;
-  total: number;
-  new_models: number;
-  existing_models: number;
-  models: LegacyModelImportPreviewItem[];
-}
-
-export interface LegacyModelImportResult {
-  imported: number;
-  skipped: number;
-  total: number;
-}
-
 export interface ModelConnectivityResult {
   duration_ms: number;
   first_valid_response_ms: number | null;
@@ -122,14 +67,6 @@ export interface ProxySettings {
   auth_enabled: boolean;
   username: string;
   has_password: boolean;
-}
-
-export interface ProxySettingsInput {
-  mode: ProxyMode;
-  address: string;
-  auth_enabled: boolean;
-  username: string;
-  password?: string;
 }
 
 export interface DesktopSettings {
@@ -244,13 +181,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   models: () => request<Model[]>("/models"),
-  createModels: (models: ModelInput[]) => request<Model[]>("/models", { method: "POST", body: JSON.stringify({ models }) }),
-  reorderModels: (modelHashes: string[]) => request<Model[]>("/models/order", { method: "PUT", body: JSON.stringify({ model_hashes: modelHashes }) }),
-  discoverModels: (input: ModelDiscoveryInput) => request<{ models: string[] }>("/models/discover", { method: "POST", body: JSON.stringify(input) }),
-  previewV0049Models: () => request<LegacyModelImportPreview>("/models/import-v0049"),
-  importV0049Models: () => request<LegacyModelImportResult>("/models/import-v0049", { method: "POST" }),
-  updateModel: (hash: string, model: ModelInput) => request<Model>(`/models/${hash}`, { method: "PUT", body: JSON.stringify(model) }),
-  deleteModel: (hash: string) => request<void>(`/models/${hash}`, { method: "DELETE" }),
   testModel: (hash: string, testId: string, signal?: AbortSignal) => request<ModelConnectivityResult>(`/models/${encodeURIComponent(hash)}/test/${encodeURIComponent(testId)}`, { method: "POST", signal }),
   cancelModelTest: (hash: string, testId: string) => request<void>(`/models/${encodeURIComponent(hash)}/test/${encodeURIComponent(testId)}`, { method: "DELETE" }),
   overview: (filter?: { startMs: number; endMs: number; modelHashes?: string[]; bucketMs?: number }) => {
@@ -286,11 +216,9 @@ export const api = {
   },
   openExternalUrl: (url: string) => request<void>("/desktop/open-external-url", { method: "POST", body: JSON.stringify({ url }) }),
   ports: () => request<PortSettings>("/settings/ports"),
-  setPorts: (settings: PortSettings) => request<PortSettings>("/settings/ports", { method: "PUT", body: JSON.stringify(settings) }),
   statisticsStorage: () => request<StatisticsStorage>("/settings/storage/statistics"),
   clearStatisticsStorage: () => request<StatisticsStorage>("/settings/storage/statistics", { method: "DELETE" }),
   proxySettings: () => request<ProxySettings>("/settings/proxy"),
-  setProxySettings: (settings: ProxySettingsInput) => request<ProxySettings>("/settings/proxy", { method: "PUT", body: JSON.stringify(settings) }),
   desktopSettings: () => request<DesktopSettings>("/settings/desktop"),
   setDesktopSettings: (settings: DesktopSettings) => request<DesktopSettings>("/settings/desktop", { method: "PUT", body: JSON.stringify(settings) }),
   pricingSettings: () => request<TokenPricingSettings>("/settings/pricing"),

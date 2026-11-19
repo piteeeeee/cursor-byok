@@ -3,21 +3,13 @@ use crate::Result;
 use axum::{extract::State, Json};
 
 use crate::store::{
-    DesktopSettings, PortSettings, ProxySettings, ProxySettingsInput, StatisticsStorage,
-    TokenPricingSettings,
+    DesktopSettings, PortSettings, ProxySettings, StatisticsStorage, TokenPricingSettings,
 };
 
 use super::ControlService;
 
-pub async fn get_ports(State(service): State<ControlService>) -> Result<Json<PortSettings>> {
-    Ok(Json(service.ports().await?))
-}
-
-pub async fn update_ports(
-    State(service): State<ControlService>,
-    Json(settings): Json<PortSettings>,
-) -> Result<Json<PortSettings>> {
-    Ok(Json(service.set_ports(settings).await?))
+pub async fn get_ports(State(service): State<ControlService>) -> Json<PortSettings> {
+    Json(service.ports())
 }
 
 pub async fn get_storage(State(service): State<ControlService>) -> Result<Json<StatisticsStorage>> {
@@ -30,15 +22,8 @@ pub async fn clear_storage(
     Ok(Json(service.clear_statistics_storage().await?))
 }
 
-pub async fn get_proxy(State(service): State<ControlService>) -> Result<Json<ProxySettings>> {
-    Ok(Json(service.proxy_settings().await?))
-}
-
-pub async fn update_proxy(
-    State(service): State<ControlService>,
-    Json(settings): Json<ProxySettingsInput>,
-) -> Result<Json<ProxySettings>> {
-    Ok(Json(service.set_proxy_settings(settings).await?))
+pub async fn get_proxy(State(service): State<ControlService>) -> Json<ProxySettings> {
+    Json(service.proxy_settings())
 }
 
 pub async fn get_desktop(State(service): State<ControlService>) -> Result<Json<DesktopSettings>> {

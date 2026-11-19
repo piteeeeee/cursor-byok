@@ -23,33 +23,30 @@ use prost::Message;
 #[tokio::test]
 async fn summarize_replaces_model_history_and_preserves_cursor_history() {
     let (_directory, store) = fixtures::temp_store().await;
-    let model = store
-        .create_model(&ModelConfigInput {
-            sort_order: 0,
-            display_name: "Test Model".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1/chat/completions".into(),
-            use_full_url: true,
-            api_key: "test-key".into(),
-            tooltip_data: "Test Model".into(),
-            model_id: "test-model".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: serde_json::json!({}),
-            custom_headers_enabled: false,
-            custom_headers: serde_json::json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: serde_json::json!({}),
-            context_window_tokens: None,
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
+    let model = fixtures::model(ModelConfigInput {
+        sort_order: 0,
+        display_name: "Test Model".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1/chat/completions".into(),
+        use_full_url: true,
+        api_key: "test-key".into(),
+        tooltip_data: "Test Model".into(),
+        model_id: "test-model".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: serde_json::json!({}),
+        custom_headers_enabled: false,
+        custom_headers: serde_json::json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: serde_json::json!({}),
+        context_window_tokens: None,
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
     let provider = fake_provider::FakeProvider::default();
     provider.push(text_response("old answer", 4_000, 12));
     provider.push(vec![
@@ -78,6 +75,7 @@ async fn summarize_replaces_model_history_and_preserves_cursor_history() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
+        fixtures::runtime(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -199,33 +197,30 @@ async fn summarize_replaces_model_history_and_preserves_cursor_history() {
 #[tokio::test]
 async fn automatic_compaction_preflights_provider_input_and_records_rebuilt_tokens() {
     let (_directory, store) = fixtures::temp_store().await;
-    let model = store
-        .create_model(&ModelConfigInput {
-            sort_order: 0,
-            display_name: "Auto Compact Model".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1/chat/completions".into(),
-            use_full_url: true,
-            api_key: "test-key".into(),
-            tooltip_data: "Auto Compact Model".into(),
-            model_id: "auto-compact-model".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: serde_json::json!({}),
-            custom_headers_enabled: false,
-            custom_headers: serde_json::json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: serde_json::json!({}),
-            context_window_tokens: Some(100_000),
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
+    let model = fixtures::model(ModelConfigInput {
+        sort_order: 0,
+        display_name: "Auto Compact Model".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1/chat/completions".into(),
+        use_full_url: true,
+        api_key: "test-key".into(),
+        tooltip_data: "Auto Compact Model".into(),
+        model_id: "auto-compact-model".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: serde_json::json!({}),
+        custom_headers_enabled: false,
+        custom_headers: serde_json::json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: serde_json::json!({}),
+        context_window_tokens: Some(100_000),
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
     let provider = fake_provider::FakeProvider::default();
     provider.push(text_response(&"x".repeat(400_000), 150_000, 1_000));
     provider.push(text_response("automatic durable summary", 120_000, 20));
@@ -238,6 +233,7 @@ async fn automatic_compaction_preflights_provider_input_and_records_rebuilt_toke
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::runtime(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -314,60 +310,54 @@ async fn automatic_compaction_preflights_provider_input_and_records_rebuilt_toke
 #[tokio::test]
 async fn incremental_preflight_uses_conversation_anchor_across_model_switch() {
     let (_directory, store) = fixtures::temp_store().await;
-    let model_a = store
-        .create_model(&ModelConfigInput {
-            sort_order: 0,
-            display_name: "Anchor Model A".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1/chat/completions".into(),
-            use_full_url: true,
-            api_key: "test-key".into(),
-            tooltip_data: "Anchor Model A".into(),
-            model_id: "anchor-model-a".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: serde_json::json!({}),
-            custom_headers_enabled: false,
-            custom_headers: serde_json::json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: serde_json::json!({}),
-            context_window_tokens: None,
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
-    let model_b = store
-        .create_model(&ModelConfigInput {
-            sort_order: 1,
-            display_name: "Anchor Model B".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1/chat/completions".into(),
-            use_full_url: true,
-            api_key: "test-key".into(),
-            tooltip_data: "Anchor Model B".into(),
-            model_id: "anchor-model-b".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: serde_json::json!({}),
-            custom_headers_enabled: false,
-            custom_headers: serde_json::json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: serde_json::json!({}),
-            context_window_tokens: Some(200_000),
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
+    let model_a = fixtures::model(ModelConfigInput {
+        sort_order: 0,
+        display_name: "Anchor Model A".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1/chat/completions".into(),
+        use_full_url: true,
+        api_key: "test-key".into(),
+        tooltip_data: "Anchor Model A".into(),
+        model_id: "anchor-model-a".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: serde_json::json!({}),
+        custom_headers_enabled: false,
+        custom_headers: serde_json::json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: serde_json::json!({}),
+        context_window_tokens: None,
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
+    let model_b = fixtures::model(ModelConfigInput {
+        sort_order: 1,
+        display_name: "Anchor Model B".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1/chat/completions".into(),
+        use_full_url: true,
+        api_key: "test-key".into(),
+        tooltip_data: "Anchor Model B".into(),
+        model_id: "anchor-model-b".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: serde_json::json!({}),
+        custom_headers_enabled: false,
+        custom_headers: serde_json::json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: serde_json::json!({}),
+        context_window_tokens: Some(200_000),
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
     let provider = fake_provider::FakeProvider::default();
     provider.push(text_response("old answer", 103_904, 12));
     provider.push(text_response("new answer", 104_000, 12));
@@ -379,6 +369,7 @@ async fn incremental_preflight_uses_conversation_anchor_across_model_switch() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::runtime(vec![model_a.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -416,33 +407,30 @@ async fn incremental_preflight_uses_conversation_anchor_across_model_switch() {
 #[tokio::test]
 async fn irreducibly_oversized_current_input_fails_before_provider_dispatch() {
     let (_directory, store) = fixtures::temp_store().await;
-    let model = store
-        .create_model(&ModelConfigInput {
-            sort_order: 0,
-            display_name: "Overflow Model".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1/chat/completions".into(),
-            use_full_url: true,
-            api_key: "test-key".into(),
-            tooltip_data: "Overflow Model".into(),
-            model_id: "overflow-model".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: serde_json::json!({}),
-            custom_headers_enabled: false,
-            custom_headers: serde_json::json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: serde_json::json!({}),
-            context_window_tokens: Some(100_000),
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
+    let model = fixtures::model(ModelConfigInput {
+        sort_order: 0,
+        display_name: "Overflow Model".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1/chat/completions".into(),
+        use_full_url: true,
+        api_key: "test-key".into(),
+        tooltip_data: "Overflow Model".into(),
+        model_id: "overflow-model".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: serde_json::json!({}),
+        custom_headers_enabled: false,
+        custom_headers: serde_json::json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: serde_json::json!({}),
+        context_window_tokens: Some(100_000),
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
     let provider = fake_provider::FakeProvider::default();
     let assets = PromptAssets::load(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -452,6 +440,7 @@ async fn irreducibly_oversized_current_input_fails_before_provider_dispatch() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::runtime(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -506,10 +495,7 @@ async fn provider_overflow_refusal_compacts_and_retries_once() {
     // The estimate cleared the compaction check, but the provider counted
     // more and refused. The refusal is the trigger the estimate missed.
     let (_directory, store) = fixtures::temp_store().await;
-    let model = store
-        .create_model(&windowed_model("refusal-model", Some(1_000_000)))
-        .await
-        .unwrap();
+    let model = fixtures::model(windowed_model("refusal-model", Some(1_000_000)));
     let provider = fake_provider::FakeProvider::default();
     provider.push(text_response("first answer", 4_000, 12));
     provider.push_error(cursor_server::Error::Provider(
@@ -528,6 +514,7 @@ async fn provider_overflow_refusal_compacts_and_retries_once() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::runtime(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -590,10 +577,7 @@ async fn assistant_terminated_history_is_sent_with_a_user_tail() {
     // with the assistant. Anthropic refuses that as a prefill, so the run
     // appends a provider-visible continuation without persisting it.
     let (_directory, store) = fixtures::temp_store().await;
-    let model = store
-        .create_model(&windowed_model("tail-model", None))
-        .await
-        .unwrap();
+    let model = fixtures::model(windowed_model("tail-model", None));
     let provider = fake_provider::FakeProvider::default();
     provider.push(text_response("first answer", 400, 12));
     provider.push(text_response("resumed answer", 450, 12));
@@ -605,6 +589,7 @@ async fn assistant_terminated_history_is_sent_with_a_user_tail() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
+        fixtures::runtime(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );

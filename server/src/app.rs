@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     api,
-    config::{Config, ConsoleSource},
+    config::{ConsoleSource, Settings},
     control,
     cursor::{
         prompting::{PromptAssets, PromptCompiler},
@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub struct App {
-    config: Config,
+    settings: Settings,
     router: axum::Router,
     registry: TransportRegistry,
     harness: CursorHarness,
@@ -28,32 +28,40 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new(mut config: Config) -> Result<Self> {
-        let store = Store::connect(&config.database_url).await?;
-        if config.use_persisted_ports {
-            config
-                .listen_addr
-                .set_port(store.port_settings().await?.service_port);
-        }
+    pub async fn new(settings: Settings) -> Result<Self> {
+        let store = Store::connect(&settings.database_url).await?;
         let assets = PromptAssets::embedded()?;
         let compiler = PromptCompiler::new(assets);
-        let clients = crate::network::NetworkClients::new(store.clone());
+        let clients = crate::network::NetworkClients::new(settings.config.outbound_proxy.clone());
         let provider = std::sync::Arc::new(ProviderRouter::new(
             store.clone(),
+            settings.config.models.clone(),
             clients.clone(),
-            config.provider_request_timeout,
-            config.provider_stream_idle_timeout,
+            settings.config.request_timeout,
+            settings.config.stream_idle_timeout,
         ));
         let registry = TransportRegistry::with_web_cache(
             store.clone(),
+            crate::config::RuntimeConfig::new(
+                settings.config.models.clone(),
+                settings.config.default_model.clone(),
+                settings.config.outbound_proxy.clone(),
+                settings.paths.ca_dir.clone(),
+            ),
             provider.clone(),
             compiler,
             WebCache::managed()?,
         );
-        let control = control::ControlService::new(store.clone(), provider, clients.clone())?;
+        let control = control::ControlService::new(
+            store.clone(),
+            provider,
+            clients.clone(),
+            settings.config.clone(),
+            settings.paths.ca_dir.clone(),
+        )?;
         let harness = control.cursor_harness().clone();
         let mut router = api::router(registry.clone(), clients)?;
-        router = match &config.console {
+        router = match &settings.console {
             Some(ConsoleSource::Directory(directory)) => {
                 router.merge(control::web_router(control.clone(), directory))
             }
@@ -67,7 +75,7 @@ impl App {
             registry,
             harness,
             store,
-            config,
+            settings,
         })
     }
 
@@ -77,14 +85,7 @@ impl App {
     }
 
     pub async fn bind(&self) -> Result<TcpListener> {
-        let requested = self.config.listen_addr;
-        let listener = bind_service_listener(requested, self.config.use_persisted_ports).await?;
-        if self.config.use_persisted_ports {
-            self.store
-                .set_service_port(listener.local_addr()?.port())
-                .await?;
-        }
-        Ok(listener)
+        bind_service_listener(self.settings.listen_addr).await
     }
 
     pub fn harness(&self) -> CursorHarness {
@@ -148,18 +149,8 @@ impl App {
     }
 }
 
-async fn bind_service_listener(
-    requested: SocketAddr,
-    allow_random_fallback: bool,
-) -> Result<TcpListener> {
-    match TcpListener::bind(requested).await {
-        Ok(listener) => Ok(listener),
-        Err(error) if allow_random_fallback && requested.port() != 0 => {
-            tracing::warn!(%requested, %error, "configured service port unavailable; selecting a random port");
-            Ok(TcpListener::bind(SocketAddr::new(requested.ip(), 0)).await?)
-        }
-        Err(error) => Err(error.into()),
-    }
+async fn bind_service_listener(requested: SocketAddr) -> Result<TcpListener> {
+    TcpListener::bind(requested).await.map_err(Into::into)
 }
 
 async fn shutdown_signal() {

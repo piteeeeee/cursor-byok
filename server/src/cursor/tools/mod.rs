@@ -19,7 +19,6 @@ pub(crate) mod tool_call_result;
 use crate::{
     model::{CanonicalMessage, MessageContent, Role, ToolCall},
     search::{WebCache, WebFetch, WebSearch},
-    store::Store,
     Error, Result,
 };
 
@@ -69,14 +68,14 @@ impl ToolDispatcher {
     pub fn with_results(
         runtime: CursorToolRuntime,
         results: ToolResultSender,
-        store: Store,
+        outbound_proxy: Option<String>,
         web_cache: WebCache,
     ) -> Self {
         Self {
             runtime,
             results,
-            search: WebSearch::managed(store.clone()),
-            fetch: WebFetch::managed(store, web_cache),
+            search: WebSearch::managed(outbound_proxy.clone()),
+            fetch: WebFetch::managed(outbound_proxy, web_cache),
             edit_schedule: Arc::new(Mutex::new(EditSchedule::default())),
         }
     }

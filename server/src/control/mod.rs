@@ -19,10 +19,7 @@ use tower_http::{
 };
 use url::{Host, Url};
 
-pub use service::{
-    CallDetail, CallSummary, ControlService, DiscoveredModels, LegacyModelImportPreview,
-    LegacyModelImportResult, ModelConnectivityResult, ModelDiscoveryInput,
-};
+pub use service::{CallDetail, CallSummary, ControlService, ModelConnectivityResult};
 
 pub fn web_router(service: ControlService, assets: impl AsRef<std::path::Path>) -> Router {
     Router::new()
@@ -109,39 +106,20 @@ fn proxy_error(error: impl std::fmt::Display) -> Response<Body> {
 
 pub fn api_router(service: ControlService) -> Router {
     Router::new()
-        .route(
-            "/__byok-api__/api/models",
-            get(models::list).post(models::create),
-        )
-        .route("/__byok-api__/api/models/discover", post(models::discover))
-        .route(
-            "/__byok-api__/api/models/import-v0049",
-            get(models::preview_v0049).post(models::import_v0049),
-        )
-        .route("/__byok-api__/api/models/order", put(models::reorder))
-        .route("/__byok-api__/api/overview", get(overview::get))
-        .route(
-            "/__byok-api__/api/models/{model_hash}",
-            put(models::update).delete(models::remove),
-        )
+        .route("/__byok-api__/api/models", get(models::list))
         .route(
             "/__byok-api__/api/models/{model_hash}/test/{test_id}",
             post(models::test).delete(models::cancel),
         )
+        .route("/__byok-api__/api/overview", get(overview::get))
         .route("/__byok-api__/api/llm-calls", get(calls::list))
         .route("/__byok-api__/api/llm-calls/{call_id}", get(calls::detail))
-        .route(
-            "/__byok-api__/api/settings/ports",
-            get(settings::get_ports).put(settings::update_ports),
-        )
+        .route("/__byok-api__/api/settings/ports", get(settings::get_ports))
         .route(
             "/__byok-api__/api/settings/storage/statistics",
             get(settings::get_storage).delete(settings::clear_storage),
         )
-        .route(
-            "/__byok-api__/api/settings/proxy",
-            get(settings::get_proxy).put(settings::update_proxy),
-        )
+        .route("/__byok-api__/api/settings/proxy", get(settings::get_proxy))
         .route(
             "/__byok-api__/api/settings/desktop",
             get(settings::get_desktop).put(settings::update_desktop),

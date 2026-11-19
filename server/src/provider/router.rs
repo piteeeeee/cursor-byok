@@ -19,6 +19,7 @@ use super::{
 
 pub struct ProviderRouter {
     store: Store,
+    models: crate::config::Models,
     clients: crate::network::NetworkClients,
     request_timeout: Duration,
     stream_idle_timeout: Duration,
@@ -27,12 +28,14 @@ pub struct ProviderRouter {
 impl ProviderRouter {
     pub fn new(
         store: Store,
+        models: crate::config::Models,
         clients: crate::network::NetworkClients,
         request_timeout: Duration,
         stream_idle_timeout: Duration,
     ) -> Self {
         Self {
             store,
+            models,
             clients,
             request_timeout,
             stream_idle_timeout,
@@ -47,13 +50,14 @@ impl Provider for ProviderRouter {
         cancellation: CancellationToken,
     ) -> ProviderStream {
         let store = self.store.clone();
+        let models = self.models.clone();
         let clients = self.clients.clone();
         let request_timeout = self.request_timeout;
         let stream_idle_timeout = self.stream_idle_timeout;
         Box::pin(try_stream! {
             let selected = invocation.request.model.model_id.clone();
             let mut routed = invocation.clone();
-            let model = store.model(&selected).await?.ok_or_else(|| Error::Provider(format!("unknown model: {selected}")))?;
+            let model = models.get(&selected).cloned().ok_or_else(|| Error::Provider(format!("unknown model: {selected}")))?;
             let provider_type = model.provider_type();
             let request_url = model.request_url()?;
             model.configure(&mut routed.request.model);

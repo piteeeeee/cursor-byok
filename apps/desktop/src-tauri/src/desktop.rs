@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(dev)]
 use cursor_server::config::ConsoleSource;
-use cursor_server::{App, Config, Result};
+use cursor_server::{App, Result, Settings};
 
 #[cfg(not(dev))]
 use crate::frontend;
@@ -212,18 +212,18 @@ pub fn run() -> ExitCode {
                 tauri_plugin_autostart::MacosLauncher::LaunchAgent,
                 Some(vec![AUTOSTART_ARG]),
             ))?;
-            let config = Config::desktop()?;
+            let settings = Settings::load()?;
             #[cfg(dev)]
-            let config = {
-                let mut config = config;
-                config.console = Some(ConsoleSource::Proxy(
+            let settings = {
+                let mut settings = settings;
+                settings.console = Some(ConsoleSource::Proxy(
                     "http://127.0.0.1:1420"
                         .parse()
                         .expect("Vite development URL"),
                 ));
-                config
+                settings
             };
-            let server = tauri::async_runtime::block_on(App::new(config))?
+            let server = tauri::async_runtime::block_on(App::new(settings))?
                 .merge_router(desktop_api_router(app.handle().clone()));
             #[cfg(not(dev))]
             let server = server.merge_router(frontend::router(app.handle().clone()));

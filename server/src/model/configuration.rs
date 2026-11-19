@@ -148,6 +148,73 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
+    /// Normalizes `input` and builds a model, keeping `declared_hash` verbatim.
+    ///
+    /// A missing hash falls back to the historical algorithm, so a configuration
+    /// written without `model_hash` still matches the value Cursor routes with.
+    pub fn from_input(input: ModelConfigInput, declared_hash: Option<&str>) -> Result<Self> {
+        let normalized = normalize_model_input(&input)?;
+        let model_hash = match declared_hash.map(str::trim) {
+            Some(hash) if !hash.is_empty() => hash.to_string(),
+            _ => model_hash(&normalized)?,
+        };
+        Ok(Self {
+            model_hash,
+            sort_order: normalized.sort_order,
+            display_name: normalized.display_name,
+            group_name: normalized.group_name,
+            model_type: normalized.model_type,
+            base_url: normalized.base_url,
+            use_full_url: normalized.use_full_url,
+            api_key: normalized.api_key,
+            tooltip_data: normalized.tooltip_data,
+            model_id: normalized.model_id,
+            reasoning_effort: normalized.reasoning_effort,
+            openai_endpoint: normalized.openai_endpoint,
+            openai_extra_params_enabled: normalized.openai_extra_params_enabled,
+            openai_extra_params: normalized.openai_extra_params,
+            custom_headers_enabled: normalized.custom_headers_enabled,
+            custom_headers: normalized.custom_headers,
+            anthropic_extra_params_enabled: normalized.anthropic_extra_params_enabled,
+            anthropic_extra_params: normalized.anthropic_extra_params,
+            context_window_tokens: normalized.context_window_tokens,
+            max_completion_tokens: normalized.max_completion_tokens,
+            anthropic_max_tokens: normalized.anthropic_max_tokens,
+            anthropic_thinking_effort: normalized.anthropic_thinking_effort,
+            thinking_budget_tokens: normalized.thinking_budget_tokens,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        })
+    }
+
+    /// Round-trips back into the input shape the hash algorithm consumes.
+    pub fn to_input(&self) -> ModelConfigInput {
+        ModelConfigInput {
+            sort_order: self.sort_order,
+            display_name: self.display_name.clone(),
+            group_name: self.group_name.clone(),
+            model_type: self.model_type,
+            base_url: self.base_url.clone(),
+            use_full_url: self.use_full_url,
+            api_key: self.api_key.clone(),
+            tooltip_data: self.tooltip_data.clone(),
+            model_id: self.model_id.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+            openai_endpoint: self.openai_endpoint.clone(),
+            openai_extra_params_enabled: self.openai_extra_params_enabled,
+            openai_extra_params: self.openai_extra_params.clone(),
+            custom_headers_enabled: self.custom_headers_enabled,
+            custom_headers: self.custom_headers.clone(),
+            anthropic_extra_params_enabled: self.anthropic_extra_params_enabled,
+            anthropic_extra_params: self.anthropic_extra_params.clone(),
+            context_window_tokens: self.context_window_tokens,
+            max_completion_tokens: self.max_completion_tokens,
+            anthropic_max_tokens: self.anthropic_max_tokens,
+            anthropic_thinking_effort: self.anthropic_thinking_effort.clone(),
+            thinking_budget_tokens: self.thinking_budget_tokens,
+        }
+    }
+
     pub fn provider_type(&self) -> ProviderType {
         match self.model_type {
             ModelType::Anthropic => ProviderType::Anthropic,
@@ -463,5 +530,99 @@ impl ModelSpec {
             supports_image_generation: false,
             extra_params: serde_json::json!({}),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(display_name: &str, model_id: &str, endpoint: &str) -> ModelConfigInput {
+        ModelConfigInput {
+            sort_order: 1,
+            display_name: display_name.into(),
+            group_name: None,
+            model_type: ModelType::OpenAi,
+            base_url: "https://api.example.com".into(),
+            use_full_url: false,
+            api_key: "secret-key".into(),
+            tooltip_data: display_name.into(),
+            model_id: model_id.into(),
+            reasoning_effort: None,
+            openai_endpoint: endpoint.into(),
+            openai_extra_params_enabled: false,
+            openai_extra_params: serde_json::json!({}),
+            custom_headers_enabled: false,
+            custom_headers: serde_json::json!({}),
+            anthropic_extra_params_enabled: false,
+            anthropic_extra_params: serde_json::json!({}),
+            context_window_tokens: None,
+            max_completion_tokens: None,
+            anthropic_max_tokens: None,
+            anthropic_thinking_effort: None,
+            thinking_budget_tokens: None,
+        }
+    }
+
+    /// The configuration path must produce the same 16 hex characters the
+    /// SQLite-backed builds wrote, otherwise Cursor stops matching its models.
+    #[test]
+    fn configured_models_reproduce_the_legacy_hash() {
+        let cases = [
+            (
+                "chat model",
+                input(
+                    "deepseek-v4.1-flash",
+                    "deepseek-v4.1-flash",
+                    OPENAI_CHAT_ENDPOINT,
+                ),
+            ),
+            (
+                "responses model",
+                input("gpt-6-astra", "gpt-6-astra", OPENAI_RESPONSES_ENDPOINT),
+            ),
+            (
+                "full url model",
+                ModelConfigInput {
+                    base_url: "https://api.example.com/v1/chat/completions".into(),
+                    use_full_url: true,
+                    ..input("full-url", "full-url", OPENAI_CHAT_ENDPOINT)
+                },
+            ),
+            (
+                "anthropic model",
+                ModelConfigInput {
+                    model_type: ModelType::Anthropic,
+                    openai_endpoint: String::new(),
+                    anthropic_thinking_effort: Some("xhigh".into()),
+                    ..input("claude", "claude-sonnet", "")
+                },
+            ),
+        ];
+        for (label, case) in cases {
+            let legacy = model_hash(&case).unwrap();
+            let configured = ModelConfig::from_input(case.clone(), None).unwrap();
+            assert_eq!(configured.model_hash, legacy, "{label}");
+            assert_eq!(configured.model_hash.len(), 16, "{label}");
+            // A declared hash always wins so an `env:` credential cannot move it.
+            let declared = ModelConfig::from_input(case, Some("0123456789abcdef")).unwrap();
+            assert_eq!(declared.model_hash, "0123456789abcdef", "{label}");
+        }
+    }
+
+    #[test]
+    fn request_url_follows_the_configured_endpoint() {
+        let model =
+            ModelConfig::from_input(input("chat", "chat", OPENAI_CHAT_ENDPOINT), None).unwrap();
+        assert_eq!(
+            model.request_url().unwrap(),
+            "https://api.example.com/v1/chat/completions"
+        );
+        let model = ModelConfig::from_input(input("chat", "chat", OPENAI_RESPONSES_ENDPOINT), None)
+            .unwrap();
+        assert_eq!(
+            model.request_url().unwrap(),
+            "https://api.example.com/v1/responses"
+        );
     }
 }

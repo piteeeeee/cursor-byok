@@ -48,6 +48,7 @@ pub struct CursorRunContext {
 pub(crate) struct PrepareDependencies<'a> {
     pub compiler: &'a PromptCompiler,
     pub store: &'a Store,
+    pub models: &'a crate::config::Models,
     pub checkpoint: &'a CheckpointBuilder,
     pub blob_sync: &'a BlobSynchronizer,
     pub context_sync: &'a RequestContextSynchronizer,
@@ -61,6 +62,7 @@ pub(crate) async fn prepare(
     let PrepareDependencies {
         compiler,
         store,
+        models,
         checkpoint,
         blob_sync,
         context_sync,
@@ -105,7 +107,7 @@ pub(crate) async fn prepare(
         mode_from_proto(mode_number)?
     };
     let mut model = model::requested_model(request)?;
-    if let Some(configured_model) = store.model(&model.model_id).await? {
+    if let Some(configured_model) = models.get(&model.model_id) {
         configured_model.configure(&mut model);
     }
     stages.mark("model configuration");

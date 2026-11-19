@@ -105,6 +105,7 @@ async fn run_prefix_does_not_scan_unrelated_checkpoint_history() {
     let provider = TimedProvider::default();
     let registry = TransportRegistry::new(
         store.clone(),
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(PromptAssets::embedded().unwrap()),
     );

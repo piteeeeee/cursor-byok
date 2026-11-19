@@ -1,19 +1,15 @@
-//! Owns reusable outbound HTTP clients configured from persisted proxy settings.
-
+//! Owns reusable outbound HTTP clients configured from `[server] outbound_proxy`.
 use std::{sync::Arc, time::Duration};
 
 use tokio::sync::RwLock;
 
-use crate::{
-    store::{ProxySettingsSecret, Store},
-    Error, Result,
-};
+use crate::{Error, Result};
 
 const LOCAL_NO_PROXY: &str = "localhost,127.0.0.0/8,::1";
 
 #[derive(Clone)]
 pub struct NetworkClients {
-    store: Store,
+    outbound_proxy: Option<Arc<str>>,
     cache: Arc<RwLock<ClientCache>>,
 }
 
@@ -25,9 +21,9 @@ struct ClientCache {
 }
 
 impl NetworkClients {
-    pub fn new(store: Store) -> Self {
+    pub fn new(outbound_proxy: Option<String>) -> Self {
         Self {
-            store,
+            outbound_proxy: outbound_proxy.map(Arc::from),
             cache: Arc::new(RwLock::new(ClientCache::default())),
         }
     }
@@ -40,7 +36,7 @@ impl NetworkClients {
         if let Some(client) = cache.default.clone() {
             return Ok(client);
         }
-        let client = client_builder(&self.store).await?.build()?;
+        let client = client_builder(self.outbound_proxy.as_deref())?.build()?;
         cache.default = Some(client.clone());
         Ok(client)
     }
@@ -53,8 +49,7 @@ impl NetworkClients {
         if let Some(client) = cache.cursor.clone() {
             return Ok(client);
         }
-        let client = client_builder(&self.store)
-            .await?
+        let client = client_builder(self.outbound_proxy.as_deref())?
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
         cache.cursor = Some(client.clone());
@@ -80,50 +75,30 @@ impl NetworkClients {
         {
             return Ok(client.clone());
         }
-        let client = client_builder(&self.store)
-            .await?
+        let client = client_builder(self.outbound_proxy.as_deref())?
             .timeout(timeout)
             .build()?;
         cache.provider = Some((timeout, client.clone()));
         Ok(client)
     }
-
-    pub async fn invalidate(&self) {
-        *self.cache.write().await = ClientCache::default();
-    }
 }
 
-pub async fn client_builder(store: &Store) -> Result<reqwest::ClientBuilder> {
-    let settings = store.proxy_settings_secret().await?;
+pub fn client_builder(outbound_proxy: Option<&str>) -> Result<reqwest::ClientBuilder> {
     // Use the platform TLS stack for compatibility with provider gateways that
     // only offer legacy TLS 1.2 cipher suites unsupported by rustls.
     let mut builder = reqwest::Client::builder().use_native_tls();
-    if settings.mode.is_custom() {
-        builder = builder.proxy(custom_proxy(&settings)?);
+    if let Some(address) = outbound_proxy {
+        builder = builder.proxy(custom_proxy(address)?);
     }
     Ok(builder)
 }
 
-pub async fn client(store: &Store) -> Result<reqwest::Client> {
-    Ok(client_builder(store).await?.build()?)
+pub fn client(outbound_proxy: Option<&str>) -> Result<reqwest::Client> {
+    Ok(client_builder(outbound_proxy)?.build()?)
 }
 
-pub async fn blocking_client_builder(store: &Store) -> Result<reqwest::blocking::ClientBuilder> {
-    let settings = store.proxy_settings_secret().await?;
-    let mut builder = reqwest::blocking::Client::builder().use_native_tls();
-    if settings.mode.is_custom() {
-        builder = builder.proxy(custom_proxy(&settings)?);
-    }
-    Ok(builder)
-}
-
-fn custom_proxy(settings: &ProxySettingsSecret) -> Result<reqwest::Proxy> {
-    let mut proxy = reqwest::Proxy::all(&settings.address)?
-        .no_proxy(reqwest::NoProxy::from_string(LOCAL_NO_PROXY));
-    if settings.auth_enabled {
-        proxy = proxy.basic_auth(&settings.username, &settings.password);
-    }
-    Ok(proxy)
+fn custom_proxy(address: &str) -> Result<reqwest::Proxy> {
+    Ok(reqwest::Proxy::all(address)?.no_proxy(reqwest::NoProxy::from_string(LOCAL_NO_PROXY)))
 }
 
 pub fn reject_self_proxy(address: &str, local_proxy_port: u16) -> Result<()> {
@@ -156,17 +131,6 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use crate::store::ProxyMode;
-
-    fn custom_settings(address: String) -> ProxySettingsSecret {
-        ProxySettingsSecret {
-            mode: ProxyMode::Custom,
-            address,
-            auth_enabled: false,
-            username: String::new(),
-            password: String::new(),
-        }
-    }
 
     #[test]
     fn rejects_only_own_loopback_proxy_port() {
@@ -198,9 +162,8 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let settings = custom_settings(format!("http://{proxy_address}"));
         let client = reqwest::Client::builder()
-            .proxy(custom_proxy(&settings).unwrap())
+            .proxy(custom_proxy(&format!("http://{proxy_address}")).unwrap())
             .build()
             .unwrap();
 

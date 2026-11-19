@@ -252,6 +252,7 @@ async fn registry_shutdown_cancels_runs_and_closes_run_sse_outputs() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -279,6 +280,7 @@ async fn client_heartbeat_returns_a_server_protocol_heartbeat() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -346,7 +348,12 @@ async fn runtime_cancel_action_aborts_active_exec_before_canceled_end_stream() {
             .as_path(),
     )
     .unwrap();
-    let registry = TransportRegistry::new(store, Arc::new(provider), PromptCompiler::new(assets));
+    let registry = TransportRegistry::new(
+        store,
+        fixtures::empty_runtime(),
+        Arc::new(provider),
+        PromptCompiler::new(assets),
+    );
     let handle = registry.get_or_create("cancel-request").await.unwrap();
     let mut output = handle.subscribe();
     handle
@@ -436,6 +443,7 @@ async fn queued_user_message_after_turn_ended_starts_the_next_turn() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -515,6 +523,7 @@ async fn runtime_user_message_action_interrupts_and_continues_with_new_message()
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -604,6 +613,7 @@ async fn runtime_user_message_reports_delivered_and_appended() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -718,6 +728,7 @@ async fn tool_call_with_empty_arguments_does_not_fail_the_run() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -785,6 +796,7 @@ async fn injected_user_context_restarts_only_the_active_model_cycle() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -894,6 +906,7 @@ async fn injected_user_context_aborts_pending_tools_and_ignores_late_results() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -1004,6 +1017,7 @@ async fn injected_user_context_detaches_subagents_without_cancelling_them() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -1081,33 +1095,30 @@ async fn injected_user_context_detaches_subagents_without_cancelling_them() {
 #[tokio::test]
 async fn injected_user_context_interrupts_automatic_compaction() {
     let (_directory, store) = fixtures::temp_store().await;
-    let model = store
-        .create_model(&ModelConfigInput {
-            sort_order: 0,
-            display_name: "Test Model".into(),
-            group_name: None,
-            model_type: ModelType::OpenAi,
-            base_url: "https://example.com/v1/chat/completions".into(),
-            use_full_url: true,
-            api_key: "test-key".into(),
-            tooltip_data: "Test Model".into(),
-            model_id: "test-model".into(),
-            reasoning_effort: None,
-            openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
-            openai_extra_params_enabled: false,
-            openai_extra_params: serde_json::json!({}),
-            custom_headers_enabled: false,
-            custom_headers: serde_json::json!({}),
-            anthropic_extra_params_enabled: false,
-            anthropic_extra_params: serde_json::json!({}),
-            context_window_tokens: Some(100_000),
-            max_completion_tokens: None,
-            anthropic_max_tokens: None,
-            anthropic_thinking_effort: None,
-            thinking_budget_tokens: None,
-        })
-        .await
-        .unwrap();
+    let model = fixtures::model(ModelConfigInput {
+        sort_order: 0,
+        display_name: "Test Model".into(),
+        group_name: None,
+        model_type: ModelType::OpenAi,
+        base_url: "https://example.com/v1/chat/completions".into(),
+        use_full_url: true,
+        api_key: "test-key".into(),
+        tooltip_data: "Test Model".into(),
+        model_id: "test-model".into(),
+        reasoning_effort: None,
+        openai_endpoint: OPENAI_CHAT_ENDPOINT.into(),
+        openai_extra_params_enabled: false,
+        openai_extra_params: serde_json::json!({}),
+        custom_headers_enabled: false,
+        custom_headers: serde_json::json!({}),
+        anthropic_extra_params_enabled: false,
+        anthropic_extra_params: serde_json::json!({}),
+        context_window_tokens: Some(100_000),
+        max_completion_tokens: None,
+        anthropic_max_tokens: None,
+        anthropic_thinking_effort: None,
+        thinking_budget_tokens: None,
+    });
     let provider = fake_provider::FakeProvider::default();
     let seed_answer = "x".repeat(400_000);
     provider.push(text_response(&seed_answer));
@@ -1121,6 +1132,7 @@ async fn injected_user_context_interrupts_automatic_compaction() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::runtime(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -1260,6 +1272,7 @@ async fn stale_context_injection_is_rejected_without_failing_the_active_run() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -1370,6 +1383,7 @@ async fn unsupported_runtime_action_is_ignored_without_failing_the_active_run() 
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -1461,6 +1475,7 @@ async fn cancel_subagent_action_aborts_the_target_task_and_keeps_the_parent_runn
     .unwrap();
     let registry = TransportRegistry::new(
         store,
+        fixtures::empty_runtime(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );

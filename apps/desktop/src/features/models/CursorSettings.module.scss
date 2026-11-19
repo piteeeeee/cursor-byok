@@ -355,3 +355,9 @@
     grid-column: auto;
   }
 }
+
+.configHint {
+  margin: 12px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}

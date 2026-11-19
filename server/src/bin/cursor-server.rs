@@ -1,5 +1,5 @@
 //! Starts the Cursor BYOK server executable.
-use cursor_server::{App, Config, Result};
+use cursor_server::{App, Result, Settings};
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
@@ -12,5 +12,5 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    App::new(Config::from_env()?).await?.serve().await
+    App::new(Settings::load()?).await?.serve().await
 }

@@ -255,7 +255,7 @@ async fn bidi_handler(
     let request: ai::BidiAppendRequest = connect::decode_unary(&body)?;
     let decoded = bidi::decode(&request)?;
     let local = if let Some(model_id) = decoded.model_id() {
-        if registry.store().model(model_id).await?.is_some() {
+        if registry.models().contains(model_id) {
             tracing::info!(
                 request_id = decoded.request_id,
                 model_id,

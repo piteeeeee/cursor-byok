@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { api, type CursorHarnessStatus, type LlmCall, type Model, type ModelInput, type Overview, type PortSettings, type TokenPricingSettings } from "../api";
+import { api, type CursorHarnessStatus, type LlmCall, type Model, type Overview, type PortSettings, type TokenPricingSettings } from "../api";
 import { applyTheme, isThemeId, type ThemeId } from "../theme/theme";
 
 export const DEFAULT_TOKEN_PRICING: TokenPricingSettings = {
@@ -96,13 +96,6 @@ export const appStore = {
     }
   },
 
-  async deleteModel(modelHash: string) {
-    await perform(async () => {
-      await api.deleteModel(modelHash);
-      await appStore.refresh();
-    });
-  },
-
   async initializeCursorCa() {
     update({ cursorBusy: true, error: null });
     try {
@@ -120,70 +113,6 @@ export const appStore = {
     catch (cause) { update({ error: cause instanceof Error ? cause.message : String(cause) }); }
     finally { update({ cursorBusy: false }); }
   },
-  async createModels(models: ModelInput[]) {
-    update({ cursorBusy: true, error: null });
-    try {
-      const created = await api.createModels(models);
-      await appStore.refresh();
-      return created;
-    } catch (cause) {
-      update({ error: cause instanceof Error ? cause.message : String(cause) });
-      return null;
-    } finally { update({ cursorBusy: false }); }
-  },
-  async importV0049Models() {
-    update({ cursorBusy: true, error: null });
-    try {
-      const result = await api.importV0049Models();
-      await appStore.refresh();
-      return result;
-    } catch (cause) {
-      update({ error: cause instanceof Error ? cause.message : String(cause) });
-      return null;
-    } finally { update({ cursorBusy: false }); }
-  },
-  async updateCursorModel(hash: string, model: ModelInput) {
-    update({ cursorBusy: true, error: null });
-    try {
-      const updated = await api.updateModel(hash, model);
-      await appStore.refresh();
-      return updated;
-    } catch (cause) {
-      update({ error: cause instanceof Error ? cause.message : String(cause) });
-      return null;
-    } finally { update({ cursorBusy: false }); }
-  },
-  async reorderCursorModels(modelHashes: string[]) {
-    const previous = snapshot.models;
-    const byHash = new Map(previous.map((model) => [model.model_hash, model]));
-    if (modelHashes.length !== previous.length || new Set(modelHashes).size !== previous.length) {
-      update({ error: t("模型配置已发生变化，请刷新后重试") });
-      return false;
-    }
-    const reordered: Model[] = [];
-    for (const [index, hash] of modelHashes.entries()) {
-      const model = byHash.get(hash);
-      if (!model) {
-        update({ error: t("模型配置已发生变化，请刷新后重试") });
-        return false;
-      }
-      reordered.push({ ...model, sort_order: index + 1 });
-    }
-    update({ models: reordered, cursorBusy: true, error: null });
-    try {
-      update({ models: await api.reorderModels(modelHashes) });
-      return true;
-    } catch (cause) {
-      update({
-        models: previous,
-        error: cause instanceof Error ? cause.message : String(cause),
-      });
-      return false;
-    } finally {
-      update({ cursorBusy: false });
-    }
-  },
-
   async refreshCalls() {
     try {
       update({ calls: await api.calls() });
@@ -194,16 +123,6 @@ export const appStore = {
 
   async openCallDetails(callId: string) {
     await perform(() => api.openCallDetails(callId));
-  },
-  async updatePorts(ports: PortSettings) {
-    try {
-      update({ error: null });
-      update({ ports: await api.setPorts(ports) });
-      return true;
-    } catch (cause) {
-      update({ error: cause instanceof Error ? cause.message : String(cause) });
-      return false;
-    }
   },
   async updatePricingSettings(pricing: TokenPricingSettings) {
     try {

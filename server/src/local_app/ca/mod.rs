@@ -19,7 +19,7 @@ use sha1::{Digest, Sha1};
 use time::{Duration, OffsetDateTime};
 use x509_parser::prelude::FromDer;
 
-use crate::{config::managed_data_dir, Error, Result};
+use crate::{Error, Result};
 
 use super::CaState;
 
@@ -33,10 +33,8 @@ pub struct LoadedCa {
 }
 
 impl CaManager {
-    pub fn managed() -> Result<Self> {
-        Ok(Self {
-            dir: managed_data_dir()?.join("ca"),
-        })
+    pub fn managed(dir: std::path::PathBuf) -> Result<Self> {
+        Ok(Self { dir })
     }
 
     fn cert_path(&self) -> PathBuf {

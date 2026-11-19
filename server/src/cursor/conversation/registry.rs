@@ -5,6 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{mpsc, Mutex, Notify};
 
 use crate::{
+    config::RuntimeConfig,
     cursor::{prompting::PromptCompiler, transport::TransportHandle},
     model::{ConversationId, RunId},
     provider::Provider,
@@ -23,6 +24,7 @@ pub struct ConversationRegistry {
 #[derive(Clone)]
 pub(crate) struct ConversationDependencies {
     pub store: Store,
+    pub runtime: RuntimeConfig,
     pub provider: Arc<dyn Provider>,
     pub compiler: PromptCompiler,
     pub web_cache: WebCache,
@@ -44,6 +46,7 @@ struct ActiveRun {
 impl ConversationRegistry {
     pub fn new(
         store: Store,
+        runtime: RuntimeConfig,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
         web_cache: WebCache,
@@ -55,12 +58,17 @@ impl ConversationRegistry {
                 changed: Notify::new(),
                 dependencies: ConversationDependencies {
                     store,
+                    runtime,
                     provider,
                     compiler,
                     web_cache,
                 },
             }),
         }
+    }
+
+    pub fn default_model(&self) -> String {
+        self.inner.dependencies.runtime.default_model.clone()
     }
 
     pub(crate) fn dependencies(&self) -> &ConversationDependencies {

@@ -11,6 +11,7 @@ use std::{
 use tokio::sync::{mpsc, Mutex, Notify};
 
 use crate::{
+    config::Models,
     cursor::{conversation::ConversationRegistry, prompting::PromptCompiler},
     provider::Provider,
     search::WebCache,
@@ -31,6 +32,7 @@ struct RegistryInner {
     upstream: Mutex<HashMap<String, u64>>,
     route_changed: Notify,
     store: Store,
+    models: Models,
     web_cache: WebCache,
     conversations: ConversationRegistry,
 }
@@ -48,21 +50,28 @@ pub enum TransportRoute {
 }
 
 impl TransportRegistry {
-    pub fn new(store: Store, provider: Arc<dyn Provider>, compiler: PromptCompiler) -> Self {
-        Self::with_web_cache(store, provider, compiler, WebCache::default())
+    pub fn new(
+        store: Store,
+        runtime: crate::config::RuntimeConfig,
+        provider: Arc<dyn Provider>,
+        compiler: PromptCompiler,
+    ) -> Self {
+        Self::with_web_cache(store, runtime, provider, compiler, WebCache::default())
     }
 
     pub fn with_web_cache(
         store: Store,
+        runtime: crate::config::RuntimeConfig,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
         web_cache: WebCache,
     ) -> Self {
-        Self::build(store, provider, compiler, web_cache)
+        Self::build(store, runtime, provider, compiler, web_cache)
     }
 
     fn build(
         store: Store,
+        runtime: crate::config::RuntimeConfig,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
         web_cache: WebCache,
@@ -75,11 +84,13 @@ impl TransportRegistry {
                 route_changed: Notify::new(),
                 conversations: ConversationRegistry::new(
                     store.clone(),
+                    runtime.clone(),
                     provider,
                     compiler,
                     web_cache.clone(),
                 ),
                 store,
+                models: runtime.models,
                 web_cache,
             }),
         }
@@ -87,6 +98,14 @@ impl TransportRegistry {
 
     pub fn store(&self) -> &Store {
         &self.inner.store
+    }
+
+    pub fn models(&self) -> &Models {
+        &self.inner.models
+    }
+
+    pub fn default_model(&self) -> String {
+        self.inner.conversations.default_model()
     }
 
     pub fn web_cache(&self) -> &WebCache {

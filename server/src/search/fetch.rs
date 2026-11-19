@@ -15,8 +15,6 @@ use reqwest::{
 use tokio::{net::lookup_host, time::timeout};
 use url::{Host, Url};
 
-use crate::store::Store;
-
 use super::{WebCache, WebCacheEntry};
 
 const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024;
@@ -42,7 +40,7 @@ pub struct WebFetch {
 
 #[derive(Clone)]
 enum FetchClient {
-    Managed(Store),
+    Managed(Option<String>),
     Direct,
 }
 
@@ -54,9 +52,9 @@ impl WebFetch {
         }
     }
 
-    pub(crate) fn managed(store: Store, cache: WebCache) -> Self {
+    pub(crate) fn managed(outbound_proxy: Option<String>, cache: WebCache) -> Self {
         Self {
-            client: FetchClient::Managed(store),
+            client: FetchClient::Managed(outbound_proxy),
             cache,
         }
     }
@@ -124,9 +122,10 @@ impl WebFetch {
         }
 
         let builder = match &self.client {
-            FetchClient::Managed(store) => crate::network::client_builder(store)
-                .await
-                .map_err(|error| failure(format!("HTTP client failed: {error}")))?,
+            FetchClient::Managed(outbound_proxy) => {
+                crate::network::client_builder(outbound_proxy.as_deref())
+                    .map_err(|error| failure(format!("HTTP client failed: {error}")))?
+            }
             FetchClient::Direct => reqwest::Client::builder().use_native_tls(),
         };
         let mut builder = builder
