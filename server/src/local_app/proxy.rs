@@ -190,6 +190,47 @@ fn is_local_path(path: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn ready_proxy_serves_first_https_request_to_mock_backend() {
+        use axum::{routing::get, Router};
+        let dir = tempfile::tempdir().unwrap();
+        let ca = super::super::ca::CaManager::managed(dir.path().into()).unwrap();
+        ca.initialize_local().unwrap();
+        let pem = std::fs::read(dir.path().join("ca.crt")).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backend = listener.local_addr().unwrap();
+        let mock = tokio::spawn(async move {
+            let router = Router::new().route(
+                "/aiserver.v1.AiService/GetServerConfig",
+                get(|| async { "fixture" }),
+            );
+            axum::serve(listener, router).await.unwrap();
+        });
+        let mut proxy = ProxyRuntime::default();
+        let (url, _) = proxy.start(backend, ca.load().unwrap(), 0).await.unwrap();
+        let ready = std::time::Instant::now();
+        let client = reqwest::Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_pem(&pem).unwrap())
+            .proxy(reqwest::Proxy::https(url).unwrap())
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap();
+        let response = client
+            .get("https://probe.cursor.sh/aiserver.v1.AiService/GetServerConfig")
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let elapsed = ready.elapsed();
+        println!("ready to first HTTPS response: {elapsed:?}");
+        assert_eq!(response, "fixture");
+        assert!(elapsed < std::time::Duration::from_secs(1));
+        proxy.stop().await;
+        mock.abort();
+    }
+
     #[test]
     fn cursor_cli_transport_and_model_metadata_routes_stay_local() {
         for path in [

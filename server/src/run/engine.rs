@@ -185,6 +185,8 @@ impl RunEngine {
             if cancellation.is_cancelled() {
                 return (RunOutcome::Cancelled, usage);
             }
+            // Previous iterations may have waited for a provider or a tool.
+            stages.restart_interval();
             let messages = match self.store.load_checkpoint_messages(checkpoint).await {
                 Ok(messages) => messages,
                 Err(error) => return (RunOutcome::Failed(error.into()), usage),

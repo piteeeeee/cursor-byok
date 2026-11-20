@@ -206,3 +206,44 @@ fn remove_hop_by_hop_headers(headers: &mut axum::http::HeaderMap) {
     }
     headers.remove("keep-alive");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{extract::ConnectInfo, routing::post, Router};
+    use std::net::SocketAddr;
+
+    #[tokio::test]
+    async fn loopback_forward_reuses_upstream_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream = format!("http://{}", listener.local_addr().unwrap());
+        let mock = Router::new().route(
+            "/probe",
+            post(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move { peer.to_string() }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                mock.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let proxy = CursorProxy {
+            clients: crate::network::NetworkClients::new(None),
+            upstream,
+        };
+        let mut peers = Vec::new();
+        for _ in 0..3 {
+            let request = Request::post("/probe").body(Body::empty()).unwrap();
+            let start = Instant::now();
+            let response = forward(Extension(proxy.clone()), request).await.unwrap();
+            assert!(response.status().is_success());
+            peers.push(to_bytes(response.into_body(), 128).await.unwrap());
+            println!("loopback forward including body: {:?}", start.elapsed());
+        }
+        assert_eq!(peers[0], peers[1]);
+        assert_eq!(peers[1], peers[2]);
+        server.abort();
+    }
+}

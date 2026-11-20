@@ -23,6 +23,10 @@ impl Stages {
         }
     }
 
+    pub(crate) fn restart_interval(&mut self) {
+        self.previous = Instant::now();
+    }
+
     pub(crate) fn mark(&mut self, stage: &'static str) {
         let now = Instant::now();
         tracing::info!(
