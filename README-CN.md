@@ -122,34 +122,23 @@ API Key、模型配置和应用设置保存在本机。模型请求仍会发送�
 ```text
 cursor-byok/
 ├── apps/
-│   ├── desktop/
-│   │   ├── src/
-│   │   │   ├── features/ # 首页、模型、调用记录与设置
-│   │   │   ├── shell/    # 窗口框架、页面布局与广告外壳
-│   │   │   ├── shared/   # UI、虚拟列表、状态、API 与平台能力
-│   │   │   ├── i18n/     # 本地化运行时与语言目录
-│   │   │   └── styles/   # 全局主题与排版令牌
-│   │   └── src-tauri/    # Tauri 桌面生命周期
-├── server/
+│   └── menubar/       # 纯 Rust 原生 macOS 菜单栏应用（tray-icon + muda + tao）
+├── server/            # headless 库：App / ConfigStore / UsageStore / CursorHarness
 │   ├── src/
 │   │   ├── cursor/    # Cursor 协议适配
-│   │   ├── run/       # 通用 Agent Runtime 与内部 Port
+│   │   ├── run/       # 通用 Agent Runtime
 │   │   ├── provider/  # 模型供应商适配
 │   │   ├── model/     # 聚合领域模型
-│   │   ├── store/     # SQLite Repository
-│   │   ├── control/   # 管理面 API
-│   │   ├── harness/   # Cursor 本地集成
-│   │   └── search/    # Web 与 Semble 搜索接入
-│   ├── prompt/
-│   └── migrations/
-├── crates/
-│   └── semble-core/   # 本地代码索引与搜索核心库
+│   │   ├── config/    # config.toml 解析与运行期热重载
+│   │   ├── store/     # 内存会话 + usage.db
+│   │   ├── local_app/ # Cursor 本地集成（CA、52048 代理、settings.json）
+│   │   └── search/    # Web 搜索与抓取
+│   └── prompt/
 ├── protocols/
 │   └── cursor/        # Cursor 协议定义的唯一来源
 ├── support/                     # 仓库辅助设施
 │   ├── cursor-protocol-extractor/ # Cursor 协议提取与 Go 代码生成工具
-│   ├── cursor-capture/            # Cursor 协议抓取和调试工具
-│   └── benchmarks/                # 代码搜索和索引基准测试
+│   └── cursor-capture/            # Cursor 协议抓取和调试工具
 ├── images/            # README 展示图片
 ├── Cargo.toml         # Rust 工作区配置
 └── Makefile           # 常用开发、检查和构建命令
@@ -160,28 +149,21 @@ cursor-byok/
 ### 环境要求
 
 - Rust 工具链和 Cargo
-- Node.js 与 npm
-- Tauri 2 的系统构建依赖
+- macOS（菜单栏应用只支持 macOS）
 - Docker（仅在构建 Docker 镜像时需要）
-
-### 安装依赖
-
-```bash
-npm --prefix apps/desktop install
-```
 
 ### 启动开发环境
 
-启动桌面前端：
+启动不带菜单栏的 headless 服务：
 
 ```bash
-make dev-web
+make dev-server
 ```
 
-启动桌面应用：
+启动菜单栏应用：
 
 ```bash
-make dev-desktop
+cargo run --release --package cursor-byok-lite
 ```
 
 ### 检查与构建
@@ -195,10 +177,8 @@ make check
 分别构建各部分：
 
 ```bash
-make build-web       # 构建桌面前端
-make build-server    # 构建 Rust 本地服务
-make build-desktop   # 构建 Tauri 桌面安装包
-make build-docker    # 构建 Docker 镜像
+make build-server    # 构建 headless 本地服务
+make build-app       # 构建 arm64 菜单栏 .app
 ```
 
 ## 路线图

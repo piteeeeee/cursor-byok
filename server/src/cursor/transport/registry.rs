@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::{mpsc, Mutex, Notify};
 
 use crate::{
-    config::Models,
+    config::ConfigStore,
     cursor::{conversation::ConversationRegistry, prompting::PromptCompiler},
     provider::Provider,
     search::WebCache,
@@ -32,7 +32,7 @@ struct RegistryInner {
     upstream: Mutex<HashMap<String, u64>>,
     route_changed: Notify,
     store: MemoryStore,
-    models: Models,
+    config: ConfigStore,
     web_cache: WebCache,
     conversations: ConversationRegistry,
 }
@@ -52,26 +52,26 @@ pub enum TransportRoute {
 impl TransportRegistry {
     pub fn new(
         store: MemoryStore,
-        runtime: crate::config::RuntimeConfig,
+        config: ConfigStore,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
     ) -> Self {
-        Self::with_web_cache(store, runtime, provider, compiler, WebCache::default())
+        Self::with_web_cache(store, config, provider, compiler, WebCache::default())
     }
 
     pub fn with_web_cache(
         store: MemoryStore,
-        runtime: crate::config::RuntimeConfig,
+        config: ConfigStore,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
         web_cache: WebCache,
     ) -> Self {
-        Self::build(store, runtime, provider, compiler, web_cache)
+        Self::build(store, config, provider, compiler, web_cache)
     }
 
     fn build(
         store: MemoryStore,
-        runtime: crate::config::RuntimeConfig,
+        config: ConfigStore,
         provider: Arc<dyn Provider>,
         compiler: PromptCompiler,
         web_cache: WebCache,
@@ -84,13 +84,13 @@ impl TransportRegistry {
                 route_changed: Notify::new(),
                 conversations: ConversationRegistry::new(
                     store.clone(),
-                    runtime.clone(),
+                    config.clone(),
                     provider,
                     compiler,
                     web_cache.clone(),
                 ),
                 store,
-                models: runtime.models,
+                config,
                 web_cache,
             }),
         }
@@ -100,8 +100,8 @@ impl TransportRegistry {
         &self.inner.store
     }
 
-    pub fn models(&self) -> &Models {
-        &self.inner.models
+    pub fn models(&self) -> Arc<crate::config::Models> {
+        self.inner.config.models()
     }
 
     pub fn default_model(&self) -> String {

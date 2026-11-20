@@ -6,7 +6,6 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use crate::{
-    config::ProviderConfig,
     model::{ContentPart, ModelInvocation, ProjectedContent, ProjectedMessage, Role, Usage},
     Error, Result,
 };
@@ -14,7 +13,7 @@ use crate::{
 use super::{
     attempt::{send_once, Attempt},
     map_sse_error, merge_extra_params, provider_event_error, FinishReason, ModelEvent, Provider,
-    ProviderStream,
+    ProviderConfig, ProviderStream,
 };
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 65_000;

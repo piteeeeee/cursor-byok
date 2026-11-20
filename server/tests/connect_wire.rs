@@ -106,7 +106,7 @@ async fn bidi_append_gzip_body_is_decompressed_before_protobuf_decode() {
     let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -152,7 +152,7 @@ async fn bidi_append_rejects_simultaneous_data_and_data_binary_with_bad_request(
     let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -237,7 +237,7 @@ async fn bidi_append_data_binary_routes_to_local_provider_and_streams_run_sse() 
     let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
-        fixtures::runtime(vec![saved_model.clone()]),
+        fixtures::config(vec![saved_model.clone()]),
         Arc::new(provider),
         PromptCompiler::new(assets),
     );
@@ -394,7 +394,7 @@ async fn bidi_append_declines_captured_cursor_331_run_inference_payload_with_per
     let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -444,7 +444,7 @@ async fn run_inference_sse_and_ws_upgrade_return_fallback_responses() {
     let clients = NetworkClients::new(None);
     let registry = TransportRegistry::new(
         store,
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );

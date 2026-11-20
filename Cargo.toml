@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "server",
-    "apps/desktop/src-tauri",
+    "apps/menubar",
 ]
 resolver = "2"
 
@@ -21,3 +21,10 @@ incremental = false
 
 [profile.test.package."*"]
 debug = 0
+
+# The menu bar app is a single shipped binary; smaller and faster to load.
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

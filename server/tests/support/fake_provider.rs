@@ -7,9 +7,9 @@ use std::{
 };
 
 use cursor_server::{
+    error::Error,
     model::{ModelInvocation, ModelRequest},
     provider::{ModelEvent, Provider, ProviderStream},
-    Error,
 };
 use futures_util::{stream, StreamExt};
 use tokio_util::sync::CancellationToken;

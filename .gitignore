@@ -17,8 +17,6 @@ node_modules
 cursor-server.tar
 /target/
 /server/target/
-/apps/desktop/src-tauri/gen/
-/.tauri/
 /server/*.db
 /server/*.db-shm
 /server/*.db-wal

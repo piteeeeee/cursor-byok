@@ -15,17 +15,16 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust (Linux)
-    runs-on: ubuntu-22.04
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      # The workspace includes apps/desktop/src-tauri, so even `cargo check`
-      # needs the same system libraries the release workflow installs.
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -43,46 +42,3 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --all-targets
-
-  frontend:
-    name: Frontend
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Install dependencies
-        working-directory: apps/desktop
-        run: npm ci
-
-      - name: Check types and production build
-        working-directory: apps/desktop
-        run: npm run check
-
-  desktop-rust:
-    name: Desktop Rust (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-latest
-          - macos-latest
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: Run platform Clippy
-        run: cargo clippy --package cursor-byok-desktop --all-targets -- -D warnings

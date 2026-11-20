@@ -14,9 +14,9 @@ use cursor_server::{
         proto::{agent::v1 as pb, aiserver::v1 as ai},
     },
     cursor::{TransportCommand, TransportParent, TransportRegistry},
+    error::Error,
     model::{MessageContent, Role},
     provider::{FinishReason, ModelEvent},
-    Error,
 };
 use prost::Message;
 
@@ -31,7 +31,7 @@ async fn abort_command_cancels_the_run_and_closes_output() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -89,7 +89,7 @@ async fn provider_failure_retries_from_the_current_checkpoint_without_hiding_par
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -189,7 +189,7 @@ async fn provider_failure_keeps_the_initial_checkpoint_then_returns_structured_e
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -328,7 +328,7 @@ async fn unknown_tool_response_id_is_ignored_and_the_run_continues() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider),
         PromptCompiler::new(assets),
     );
@@ -475,7 +475,7 @@ async fn newer_run_request_on_one_bidi_stream_replaces_the_active_run() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -642,7 +642,7 @@ async fn assert_run_starts_without_parent_dependency(
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );

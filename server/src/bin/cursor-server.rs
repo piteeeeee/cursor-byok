@@ -1,5 +1,5 @@
-//! Starts the Cursor BYOK server executable.
-use cursor_server::{App, Result, Settings};
+//! Runs the headless server without a menu bar, for development and containers.
+use cursor_server::{error::Result, App, ConfigStore};
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
@@ -12,5 +12,5 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    App::new(Settings::load()?).await?.serve().await
+    App::new(ConfigStore::load()?).await?.run().await
 }

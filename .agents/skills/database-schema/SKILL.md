@@ -75,10 +75,4 @@ cargo fmt --all -- --check
 cargo test --workspace
 ```
 
-If frontend contracts changed, also run from `apps/desktop`:
-
-```bash
-npm run check
-```
-
 Do not repair unrelated dirty-worktree changes while validating. Report any pre-existing failure separately from failures caused by the schema change.

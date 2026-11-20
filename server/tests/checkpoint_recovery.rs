@@ -55,7 +55,7 @@ async fn eligible_pending_checkpoint_resumes_tools_before_the_next_model_call() 
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -279,7 +279,7 @@ async fn recovery_rejects_a_kv_get_payload_whose_hash_does_not_match_the_blob_id
     .unwrap();
     let registry = TransportRegistry::new(
         store,
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(fake_provider::FakeProvider::default()),
         PromptCompiler::new(assets),
     );
@@ -427,7 +427,7 @@ async fn cold_restart_recovers_completed_tool_history_and_rebuilds_usage_anchor(
         );
         let registry = TransportRegistry::new(
             store.clone(),
-            fixtures::empty_runtime(),
+            fixtures::empty_config(),
             Arc::new(provider.clone()),
             PromptCompiler::new(PromptAssets::embedded().unwrap()),
         );

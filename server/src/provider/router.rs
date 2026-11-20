@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::{ProviderConfig, ProviderKind},
+    config::ConfigStore,
     model::{ModelInvocation, ProviderType},
     store::UsageStore,
     Error, Result,
@@ -14,31 +14,29 @@ use crate::{
 
 use super::{
     normalize::NormalizedProvider, AnthropicProvider, CallRecorder, OpenAiChatProvider,
-    OpenAiResponsesProvider, Provider, ProviderStream,
+    OpenAiResponsesProvider, Provider, ProviderConfig, ProviderKind, ProviderStream,
 };
 
+/// Routes each call to the provider API of the model the config names.
+///
+/// The catalog, timeout, and proxy are read per call, so switching the default
+/// model or reloading `config.toml` takes effect on the next run.
 pub struct ProviderRouter {
     store: UsageStore,
-    models: crate::config::Models,
+    config: ConfigStore,
     clients: crate::network::NetworkClients,
-    request_timeout: Duration,
-    stream_idle_timeout: Duration,
 }
 
 impl ProviderRouter {
     pub fn new(
         store: UsageStore,
-        models: crate::config::Models,
+        config: ConfigStore,
         clients: crate::network::NetworkClients,
-        request_timeout: Duration,
-        stream_idle_timeout: Duration,
     ) -> Self {
         Self {
             store,
-            models,
+            config,
             clients,
-            request_timeout,
-            stream_idle_timeout,
         }
     }
 }
@@ -50,10 +48,10 @@ impl Provider for ProviderRouter {
         cancellation: CancellationToken,
     ) -> ProviderStream {
         let store = self.store.clone();
-        let models = self.models.clone();
+        let models = self.config.models();
         let clients = self.clients.clone();
-        let request_timeout = self.request_timeout;
-        let stream_idle_timeout = self.stream_idle_timeout;
+        let request_timeout = self.config.request_timeout();
+        let stream_idle_timeout = self.config.stream_idle_timeout();
         Box::pin(try_stream! {
             let selected = invocation.request.model.model_id.clone();
             let mut routed = invocation.clone();

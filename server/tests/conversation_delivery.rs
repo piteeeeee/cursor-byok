@@ -34,7 +34,7 @@ async fn background_subagent_completion_starts_a_simulated_parent_turn() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -152,7 +152,7 @@ async fn background_completion_joins_the_active_run_instead_of_replacing_it() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -217,7 +217,7 @@ async fn retrying_one_background_completion_reuses_its_runtime_message() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -279,7 +279,7 @@ async fn background_shell_completion_wakes_the_parent_with_the_captured_notifica
     .unwrap();
     let registry = TransportRegistry::new(
         store,
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );

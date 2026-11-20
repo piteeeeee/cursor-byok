@@ -10,6 +10,8 @@ const LOCAL_NO_PROXY: &str = "localhost,127.0.0.0/8,::1";
 #[derive(Clone)]
 pub struct NetworkClients {
     outbound_proxy: Option<Arc<str>>,
+    /// Set for loopback-only clients: never consult an ambient system proxy.
+    direct: bool,
     cache: Arc<RwLock<ClientCache>>,
 }
 
@@ -24,6 +26,17 @@ impl NetworkClients {
     pub fn new(outbound_proxy: Option<String>) -> Self {
         Self {
             outbound_proxy: outbound_proxy.map(Arc::from),
+            direct: false,
+            cache: Arc::new(RwLock::new(ClientCache::default())),
+        }
+    }
+
+    /// Clients that never proxy: for loopback traffic, which must never leave
+    /// the machine even when an ambient system proxy is configured.
+    pub fn direct() -> Self {
+        Self {
+            outbound_proxy: None,
+            direct: true,
             cache: Arc::new(RwLock::new(ClientCache::default())),
         }
     }
@@ -36,7 +49,7 @@ impl NetworkClients {
         if let Some(client) = cache.default.clone() {
             return Ok(client);
         }
-        let client = client_builder(self.outbound_proxy.as_deref())?.build()?;
+        let client = self.builder()?.build()?;
         cache.default = Some(client.clone());
         Ok(client)
     }
@@ -49,7 +62,8 @@ impl NetworkClients {
         if let Some(client) = cache.cursor.clone() {
             return Ok(client);
         }
-        let client = client_builder(self.outbound_proxy.as_deref())?
+        let client = self
+            .builder()?
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
         cache.cursor = Some(client.clone());
@@ -75,11 +89,20 @@ impl NetworkClients {
         {
             return Ok(client.clone());
         }
-        let client = client_builder(self.outbound_proxy.as_deref())?
-            .timeout(timeout)
-            .build()?;
+        let client = self.builder()?.timeout(timeout).build()?;
         cache.provider = Some((timeout, client.clone()));
         Ok(client)
+    }
+}
+
+impl NetworkClients {
+    fn builder(&self) -> Result<reqwest::ClientBuilder> {
+        let builder = client_builder(self.outbound_proxy.as_deref())?;
+        Ok(if self.direct {
+            builder.no_proxy()
+        } else {
+            builder
+        })
     }
 }
 

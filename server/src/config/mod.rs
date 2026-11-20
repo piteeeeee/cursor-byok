@@ -5,14 +5,14 @@ mod models;
 mod paths;
 mod runtime;
 mod schema;
-mod settings;
+mod store;
 
 pub use export_db::{export, export_into, ExportSummary};
 pub use models::Models;
 pub use paths::{ensure_app_dir, initialize, load, Paths};
 pub use runtime::RuntimeConfig;
 pub use schema::Config;
-pub use settings::{ConsoleSource, ProviderConfig, ProviderKind, Settings};
+pub use store::ConfigStore;
 
 use crate::Result;
 use std::path::PathBuf;

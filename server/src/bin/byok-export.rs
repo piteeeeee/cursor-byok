@@ -1,7 +1,7 @@
 //! Exports models and ports from a previous SQLite database into `config.toml`.
 use std::path::PathBuf;
 
-use cursor_server::{config, Result};
+use cursor_server::{config, error::Result};
 
 const USAGE: &str =
     "usage: byok-export --from <database> --out <config.toml> [--default-model <name>]";

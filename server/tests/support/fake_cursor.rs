@@ -1,6 +1,6 @@
 //! Provides captured Cursor wire fixtures for integration tests.
 use bytes::Bytes;
-use cursor_server::{cursor::protocol::connect, Result};
+use cursor_server::{cursor::protocol::connect, error::Result};
 use prost::Message;
 
 pub fn decode_single<M: Message + Default>(frame: &Bytes) -> Result<M> {

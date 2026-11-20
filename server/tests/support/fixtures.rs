@@ -1,10 +1,8 @@
 //! Provides isolated stores, model catalogs, and canonical message fixtures for tests.
 #![allow(dead_code)]
 
-use std::path::PathBuf;
-
 use cursor_server::{
-    config::RuntimeConfig,
+    config::{ConfigStore, Models, Paths},
     model::{CanonicalMessage, ModelConfig, ModelConfigInput, Origin, Role},
     store::MemoryStore,
 };
@@ -19,23 +17,23 @@ pub fn model(input: ModelConfigInput) -> ModelConfig {
     ModelConfig::from_input(input, None).expect("test model configuration")
 }
 
-/// Runtime configuration carrying `models`, with the first one as default.
-pub fn runtime(models: Vec<ModelConfig>) -> RuntimeConfig {
+/// Configuration carrying `models`, with the first one as default.
+pub fn config(models: Vec<ModelConfig>) -> ConfigStore {
     let default_model = models
         .first()
         .map(|model| model.model_hash.clone())
         .unwrap_or_default();
-    RuntimeConfig::new(
-        cursor_server::config::Models::new(models).expect("test models"),
-        default_model,
-        None,
-        PathBuf::from("test-ca"),
-    )
+    in_memory(Models::new(models).expect("test models"), default_model)
 }
 
-/// Runtime configuration with no models, for tests that never route a model.
-pub fn empty_runtime() -> RuntimeConfig {
-    runtime(Vec::new())
+/// Configuration with no models, for tests that never route a model.
+pub fn empty_config() -> ConfigStore {
+    config(Vec::new())
+}
+
+fn in_memory(models: Models, default_model: String) -> ConfigStore {
+    let home = std::env::temp_dir().join(format!("cursor-byok-test-{}", std::process::id()));
+    ConfigStore::in_memory(Paths::at(&home), models, default_model).expect("test configuration")
 }
 
 pub fn user(id: &str, text: &str) -> CanonicalMessage {

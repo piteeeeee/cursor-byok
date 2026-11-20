@@ -89,17 +89,6 @@ impl UsageStore {
         Ok(())
     }
 
-    pub(crate) async fn count(&self) -> Result<i64> {
-        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM usage_records")
-            .fetch_one(&self.pool)
-            .await?)
-    }
-    pub(crate) async fn clear(&self) -> Result<()> {
-        sqlx::query("DELETE FROM usage_records")
-            .execute(&self.pool)
-            .await?;
-        self.prune().await
-    }
     async fn prune(&self) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         if self.retention_days > 0 {
@@ -120,6 +109,17 @@ impl UsageStore {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// The most recent failure summary, for surfacing in a UI.
+    pub async fn latest_error(&self) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT error_summary FROM usage_records
+             WHERE status <> 'ok' AND error_summary IS NOT NULL
+             ORDER BY ts_ms DESC, id DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?)
     }
 
     pub async fn today_and_month_summary(&self) -> Result<UsageSummary> {

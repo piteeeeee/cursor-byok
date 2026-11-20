@@ -250,7 +250,8 @@ pub async fn available_models(
     Extension(proxy): Extension<CursorProxy>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
-    let models = registry.models().all();
+    let catalog = registry.models();
+    let models = catalog.all();
     tracing::info!(
         model_count = models.len(),
         "appending BYOK models to Cursor AvailableModels"
@@ -277,7 +278,8 @@ pub async fn usable_models(
     Extension(proxy): Extension<CursorProxy>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
-    let models = registry.models().all();
+    let catalog = registry.models();
+    let models = catalog.all();
     tracing::info!(
         model_count = models.len(),
         "appending BYOK models to Cursor GetUsableModels"
@@ -298,25 +300,28 @@ pub async fn usable_models(
 pub async fn default_model_for_cli(
     State(registry): State<TransportRegistry>,
 ) -> Result<Response<Body>> {
+    let catalog = registry.models();
     Ok(local_response(
         agent::GetDefaultModelForCliResponse {
-            model: default_model_details(registry.models().all(), &registry.default_model()),
+            model: default_model_details(catalog.all(), &registry.default_model()),
         }
         .encode_to_vec(),
     ))
 }
 
 pub async fn default_model(State(registry): State<TransportRegistry>) -> Result<Response<Body>> {
+    let catalog = registry.models();
     Ok(local_response(
-        default_model_response(registry.models().all(), &registry.default_model()).encode_to_vec(),
+        default_model_response(catalog.all(), &registry.default_model()).encode_to_vec(),
     ))
 }
 
 pub async fn default_model_nudge(
     State(registry): State<TransportRegistry>,
 ) -> Result<Response<Body>> {
+    let catalog = registry.models();
     Ok(local_response(
-        default_model_nudge_response(registry.models().all()).encode_to_vec(),
+        default_model_nudge_response(catalog.all()).encode_to_vec(),
     ))
 }
 

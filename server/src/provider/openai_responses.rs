@@ -6,7 +6,6 @@ use futures_util::StreamExt;
 use serde_json::{json, Map, Value};
 
 use crate::{
-    config::ProviderConfig,
     model::{
         ContentPart, ModelInvocation, ModelLatency, ProjectedContent, ProjectedMessage, Role, Usage,
     },
@@ -17,7 +16,7 @@ use super::{
     apply_body_allowlist, apply_openai_prompt_cache_key,
     attempt::{send_once, Attempt},
     map_sse_error, merge_extra_params, provider_event_error, FinishReason, ModelEvent, Provider,
-    ProviderStream,
+    ProviderConfig, ProviderStream,
 };
 
 #[derive(Default)]

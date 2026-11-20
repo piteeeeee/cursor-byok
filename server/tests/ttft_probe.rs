@@ -90,7 +90,7 @@ async fn new_conversations_share_context_within_ttft_budget() {
     let provider = TimedProvider::default();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::empty_runtime(),
+        fixtures::empty_config(),
         Arc::new(provider.clone()),
         PromptCompiler::new(PromptAssets::embedded().unwrap()),
     );

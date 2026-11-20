@@ -1,13 +1,16 @@
-//! Assembles server dependencies and starts the application services.
-use std::{future::IntoFuture, net::SocketAddr, time::Duration};
+//! Assembles the server: one value that owns every component and its lifetime.
+//!
+//! `App::new` builds the object graph; `App::bind` starts accepting connections.
+//! Nothing here is tied to a GUI: a menu bar app, a CLI, or an embedding crate
+//! drives the same `App`.
+use std::{future::IntoFuture, time::Duration};
 
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     api,
-    config::{ConsoleSource, Settings},
-    control,
+    config::ConfigStore,
     cursor::{
         prompting::{PromptAssets, PromptCompiler},
         transport::TransportRegistry,
@@ -19,105 +22,83 @@ use crate::{
     Result,
 };
 
+/// The headless Cursor proxy and its control surface.
+#[derive(Clone)]
 pub struct App {
-    settings: Settings,
-    router: axum::Router,
+    config: ConfigStore,
+    usage: UsageStore,
     registry: TransportRegistry,
     harness: CursorHarness,
-    control: control::ControlService,
+    router: axum::Router,
 }
 
 impl App {
-    pub async fn new(settings: Settings) -> Result<Self> {
+    /// Builds every component from an already loaded configuration.
+    pub async fn new(config: ConfigStore) -> Result<Self> {
         let store = MemoryStore::default();
         let usage = UsageStore::open(
-            &settings.paths.app_dir.join("usage.db"),
-            settings.config.retention_days,
-            settings.config.max_rows,
+            &config.paths().app_dir.join("usage.db"),
+            config.retention_days(),
+            config.max_rows(),
         )
         .await?;
         let assets = PromptAssets::embedded()?;
         let compiler = PromptCompiler::new(assets);
-        let clients = crate::network::NetworkClients::new(settings.config.outbound_proxy.clone());
+        let clients = crate::network::NetworkClients::new(config.outbound_proxy());
         let provider = std::sync::Arc::new(ProviderRouter::new(
             usage.clone(),
-            settings.config.models.clone(),
+            config.clone(),
             clients.clone(),
-            settings.config.request_timeout,
-            settings.config.stream_idle_timeout,
         ));
         let registry = TransportRegistry::with_web_cache(
             store.clone(),
-            crate::config::RuntimeConfig::new(
-                settings.config.models.clone(),
-                settings.config.default_model.clone(),
-                settings.config.outbound_proxy.clone(),
-                settings.paths.ca_dir.clone(),
-            ),
-            provider.clone(),
-            compiler,
-            WebCache::at(settings.paths.app_dir.join("cache/web"))?,
-        );
-        let control = control::ControlService::new(
-            usage,
+            config.clone(),
             provider,
-            clients.clone(),
-            settings.config.clone(),
-            settings.paths.ca_dir.clone(),
-        )?;
-        let harness = control.cursor_harness().clone();
-        let mut router = api::router(registry.clone(), clients)?;
-        router = match &settings.console {
-            Some(ConsoleSource::Directory(directory)) => {
-                router.merge(control::web_router(control.clone(), directory))
-            }
-            Some(ConsoleSource::Proxy(target)) => {
-                router.merge(control::proxy_web_router(control.clone(), target.clone()))
-            }
-            None => router.merge(control::api_router(control.clone())),
-        };
+            compiler,
+            WebCache::at(config.paths().app_dir.join("cache/web"))?,
+        );
+        let harness = CursorHarness::new(&config)?;
+        let router = api::router(registry.clone(), clients)?;
         Ok(Self {
-            router,
+            config,
+            usage,
             registry,
             harness,
-            control,
-            settings,
+            router,
         })
     }
 
-    pub fn merge_router(mut self, router: axum::Router) -> Self {
-        self.router = self.router.merge(router);
-        self
+    /// The live configuration, for reading and switching the default model.
+    pub fn config(&self) -> &ConfigStore {
+        &self.config
     }
 
+    /// Today's and this month's token totals.
+    pub fn usage(&self) -> &UsageStore {
+        &self.usage
+    }
+
+    /// Enable/disable takeover, and inspect the CA and proxy state.
+    pub fn harness(&self) -> &CursorHarness {
+        &self.harness
+    }
+
+    /// Reserves the service port now, so the caller can learn it before serving.
     pub async fn bind(&self) -> Result<TcpListener> {
-        bind_service_listener(self.settings.listen_addr).await
+        TcpListener::bind(self.config.listen_addr())
+            .await
+            .map_err(Into::into)
     }
 
-    pub fn harness(&self) -> CursorHarness {
-        self.harness.clone()
-    }
-
-    pub fn control(&self) -> &control::ControlService {
-        &self.control
-    }
-
-    pub async fn serve(self) -> Result<()> {
+    /// Serves until `shutdown` is cancelled, then disables the Cursor takeover.
+    pub async fn serve(self, shutdown: CancellationToken) -> Result<()> {
         let listener = self.bind().await?;
-        let shutdown = CancellationToken::new();
-        let signal_shutdown = shutdown.clone();
-        let running = self.serve_on(listener, shutdown);
-        tokio::pin!(running);
-        tokio::select! {
-            result = &mut running => result,
-            () = shutdown_signal() => {
-                tracing::info!("shutdown signal received; cancelling active runs");
-                signal_shutdown.cancel();
-                running.await
-            }
-        }
+        self.serve_on(listener, shutdown).await
     }
 
+    /// Serves on an already bound listener, so the address is known upfront.
+    ///
+    /// Takes the `App` by value, since serving owns the router for its lifetime.
     pub async fn serve_on(self, listener: TcpListener, shutdown: CancellationToken) -> Result<()> {
         let address = listener.local_addr()?;
         self.registry.web_cache().set_service_addr(address);
@@ -153,10 +134,22 @@ impl App {
         }
         Ok(())
     }
-}
 
-async fn bind_service_listener(requested: SocketAddr) -> Result<TcpListener> {
-    TcpListener::bind(requested).await.map_err(Into::into)
+    /// Serves until the process receives `SIGINT` or `SIGTERM`.
+    pub async fn run(self) -> Result<()> {
+        let shutdown = CancellationToken::new();
+        let signal_shutdown = shutdown.clone();
+        let running = self.serve(shutdown);
+        tokio::pin!(running);
+        tokio::select! {
+            result = &mut running => result,
+            () = shutdown_signal() => {
+                tracing::info!("shutdown signal received; cancelling active runs");
+                signal_shutdown.cancel();
+                running.await
+            }
+        }
+    }
 }
 
 async fn shutdown_signal() {

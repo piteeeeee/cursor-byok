@@ -65,7 +65,7 @@ impl ConversationRuntime {
         handle: TransportHandle,
         mut receiver: mpsc::Receiver<TransportCommand>,
     ) {
-        tokio::spawn(async move {
+        tokio::spawn(CarryDispatcher::new(async move {
             let _actor_guard = TransportActorGuard(handle.clone());
             let dependencies = registry.dependencies().clone();
             let blob_sync = BlobSynchronizer::new(
@@ -506,7 +506,43 @@ impl ConversationRuntime {
                     }
                 }
             }
-        });
+        }));
+    }
+}
+
+/// Polls `inner` under the tracing dispatcher that was current when it was made.
+///
+/// An actor runs on whichever runtime worker the scheduler picks, so it would
+/// otherwise log and time itself into that worker's thread-local subscriber —
+/// which is nobody's. Carrying the dispatcher keeps a run's own instrumentation
+/// attached to whoever started it.
+struct CarryDispatcher<F> {
+    inner: F,
+    dispatcher: tracing::Dispatch,
+}
+
+impl<F> CarryDispatcher<F> {
+    fn new(inner: F) -> Self {
+        Self {
+            inner,
+            dispatcher: tracing::dispatcher::get_default(|current| current.clone()),
+        }
+    }
+}
+
+impl<F: std::future::Future> std::future::Future for CarryDispatcher<F> {
+    type Output = F::Output;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // SAFETY: `inner` is never moved out of `self`; this only reborrows the
+        // field as pinned, which is what the caller's pin already guarantees.
+        let this = unsafe { self.get_unchecked_mut() };
+        let dispatcher = this.dispatcher.clone();
+        let inner = unsafe { std::pin::Pin::new_unchecked(&mut this.inner) };
+        tracing::dispatcher::with_default(&dispatcher, || inner.poll(context))
     }
 }
 
@@ -541,7 +577,7 @@ async fn start_generation(
     let tools = ToolDispatcher::with_results(
         tool_runtime.clone(),
         results.clone(),
-        dependencies.runtime.outbound_proxy.clone(),
+        dependencies.config.outbound_proxy(),
         dependencies.web_cache.clone(),
     );
     let generation = RunGeneration {
@@ -612,7 +648,9 @@ fn spawn_run_request(
     results: ToolResultReceiver,
     runtime_actions: mpsc::UnboundedReceiver<compile::RuntimeAction>,
 ) {
-    tokio::spawn(async move {
+    // A task forked from the actor leaves its guarded scope; carry the dispatcher
+    // so the Run's own stage timings keep reaching the same subscriber.
+    tokio::spawn(CarryDispatcher::new(async move {
         let _finished = FinishGeneration(generation.finished.clone());
         if let Some(previous_finished) = previous_finished {
             tokio::select! {
@@ -631,6 +669,7 @@ fn spawn_run_request(
             handle.parent().map(|parent| parent.tool_call_id.clone()),
             request.conversation_state.clone(),
         );
+        let models = dependencies.config.models();
         let prepared = tokio::select! {
             biased;
             _ = generation.superseded.cancelled() => return,
@@ -640,7 +679,7 @@ fn spawn_run_request(
                 compile::PrepareDependencies {
                     compiler: &dependencies.compiler,
                     store: &dependencies.store,
-                    models: &dependencies.runtime.models,
+                    models: &models,
                     checkpoint: &checkpoint,
                     blob_sync: &blob_sync,
                     context_sync: &context_sync,
@@ -821,7 +860,7 @@ fn spawn_run_request(
                 })
                 .await;
         }
-    });
+    }));
 }
 
 fn runtime_action_name(action: &pb::conversation_action::Action) -> &'static str {

@@ -75,7 +75,7 @@ async fn summarize_replaces_model_history_and_preserves_cursor_history() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::runtime(vec![model.clone()]),
+        fixtures::config(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -233,7 +233,7 @@ async fn automatic_compaction_preflights_provider_input_and_records_rebuilt_toke
     .unwrap();
     let registry = TransportRegistry::new(
         store,
-        fixtures::runtime(vec![model.clone()]),
+        fixtures::config(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -369,7 +369,7 @@ async fn incremental_preflight_uses_conversation_anchor_across_model_switch() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
-        fixtures::runtime(vec![model_a.clone()]),
+        fixtures::config(vec![model_a.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -440,7 +440,7 @@ async fn irreducibly_oversized_current_input_fails_before_provider_dispatch() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
-        fixtures::runtime(vec![model.clone()]),
+        fixtures::config(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -498,7 +498,7 @@ async fn provider_overflow_refusal_compacts_and_retries_once() {
     let model = fixtures::model(windowed_model("refusal-model", Some(1_000_000)));
     let provider = fake_provider::FakeProvider::default();
     provider.push(text_response("first answer", 4_000, 12));
-    provider.push_error(cursor_server::Error::Provider(
+    provider.push_error(cursor_server::error::Error::Provider(
         "Anthropic 400 Bad Request: {\"type\":\"error\",\"error\":{\"type\":\
          \"invalid_request_error\",\"message\":\"prompt is too long: 1002148 tokens > \
          1000000 maximum\"}}"
@@ -514,7 +514,7 @@ async fn provider_overflow_refusal_compacts_and_retries_once() {
     .unwrap();
     let registry = TransportRegistry::new(
         store,
-        fixtures::runtime(vec![model.clone()]),
+        fixtures::config(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );
@@ -589,7 +589,7 @@ async fn assistant_terminated_history_is_sent_with_a_user_tail() {
     .unwrap();
     let registry = TransportRegistry::new(
         store.clone(),
-        fixtures::runtime(vec![model.clone()]),
+        fixtures::config(vec![model.clone()]),
         Arc::new(provider.clone()),
         PromptCompiler::new(assets),
     );

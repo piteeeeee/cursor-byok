@@ -213,6 +213,8 @@ mod tests {
     use axum::{extract::ConnectInfo, routing::post, Router};
     use std::net::SocketAddr;
 
+    /// Loopback fixtures must not be resolved through an ambient system proxy,
+    /// which would replace the peer address this test reads.
     #[tokio::test]
     async fn loopback_forward_reuses_upstream_connection() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -230,7 +232,7 @@ mod tests {
             .unwrap();
         });
         let proxy = CursorProxy {
-            clients: crate::network::NetworkClients::new(None),
+            clients: crate::network::NetworkClients::direct(),
             upstream,
         };
         let mut peers = Vec::new();
